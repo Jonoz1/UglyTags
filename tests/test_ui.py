@@ -716,19 +716,52 @@ async def test_prefix_create_on_own_tag_offers_overwrite_or_new_name(command_nam
     args = bot.db.create_tag.await_args.args
     assert args[1:] == (1, "hello2", "new body\n{attach:file.txt}", 2, {"file.txt": b"data"})
     assert "created" in click.edit_original_response.await_args.kwargs["content"]
-    await view.overwrite.callback(button_event())
+    repeat = button_event()
+    await view.overwrite.callback(repeat)
+    repeat.response.defer.assert_awaited_once()
     assert bot.db.create_tag.await_count == 1
     bot.db.save_content.assert_not_awaited()
     await bot.close()
 
 
-async def test_prefix_create_on_other_users_tag_offers_new_name_only():
-    bot = conflict_bot(tag(owner_id=3))
-    message = prefix_message(".t add hello body")
+@pytest.mark.parametrize(
+    ("row", "permissions", "text", "labels"),
+    [
+        (tag(owner_id=3), {}, "belongs to someone else", ["Create as hello1", "Cancel"]),
+        (
+            tag(owner_id=3),
+            {"administrator": True},
+            "belongs to <@3>",
+            ["Overwrite", "Create as hello1", "Cancel"],
+        ),
+        (tag(is_group=True), {}, "is a tag group", ["Create as hello1", "Cancel"]),
+    ],
+)
+async def test_prefix_create_conflict_choices(row, permissions, text, labels):
+    bot = conflict_bot(row)
+    message = prefix_message(".t add hello body", **permissions)
     await ui.handle_prefix_message(bot, message)
-    assert "belongs to someone else" in message.reply.await_args.args[0]
+    assert text in message.reply.await_args.args[0]
     view = message.reply.await_args.kwargs["view"]
-    assert [item.label for item in view.children] == ["Create as hello1", "Cancel"]
+    assert [item.label for item in view.children] == labels
+    await bot.close()
+
+
+async def test_prefix_create_conflict_reports_media_error(monkeypatch):
+    bot = conflict_bot(tag())
+    monkeypatch.setattr(
+        ui, "read_uploads", AsyncMock(side_effect=ui.MediaError("error.media_size"))
+    )
+    attachment = SimpleNamespace(size=4, filename="file.txt")
+    message = prefix_message(".t add hello", attachments=[attachment])
+    await ui.handle_prefix_message(bot, message)
+    view = message.reply.await_args.kwargs["view"]
+    click = button_event()
+    await view.create_as.callback(click)
+    ui.read_uploads.assert_awaited_once_with([attachment], bot.max_media_bytes)
+    assert "Each file must be" in click.edit_original_response.await_args.kwargs["content"]
+    assert view.attachments == []
+    bot.db.create_tag.assert_not_awaited()
     await bot.close()
 
 

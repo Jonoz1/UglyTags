@@ -388,6 +388,19 @@ class OwnedView(discord.ui.View):
         await report_error(interaction, error)
 
 
+async def finish_save(bot, interaction, name, content, attachments, expected):
+    await interaction.response.defer()
+    try:
+        uploads = await read_uploads(attachments, bot.max_media_bytes)
+    except MediaError as error:
+        await interaction.edit_original_response(
+            content=t(str(error), max_media_mb=bot.max_media_mb), view=None
+        )
+        return
+    message = await save_tag(bot, interaction, name, content, uploads, expected)
+    await interaction.edit_original_response(content=message, view=None)
+
+
 class SaveConfirmation(OwnedView):
     def __init__(self, bot, owner_id, guild_id, name, content, attachments, expected):
         super().__init__(owner_id, CONFIRM_TIMEOUT)
@@ -397,21 +410,13 @@ class SaveConfirmation(OwnedView):
     @discord.ui.button(label=t("action.continue"), style=discord.ButtonStyle.primary)
     async def confirm(self, interaction, button):
         if self.is_finished() or interaction.guild_id != self.guild_id:
+            await interaction.response.defer()
             return
         self.stop()
-        await interaction.response.defer()
         attachments, self.attachments = self.attachments, []
-        try:
-            uploads = await read_uploads(attachments, self.bot.max_media_bytes)
-        except MediaError as error:
-            await interaction.edit_original_response(
-                content=t(str(error), max_media_mb=self.bot.max_media_mb), view=None
-            )
-            return
-        message = await save_tag(
-            self.bot, interaction, self.name, self.content, uploads, self.expected
+        await finish_save(
+            self.bot, interaction, self.name, self.content, attachments, self.expected
         )
-        await interaction.edit_original_response(content=message, view=None)
 
     @discord.ui.button(label=t("action.cancel"), style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction, button):
@@ -489,19 +494,11 @@ class CreateConflict(OwnedView):
             )
             return
         if self.is_finished():
+            await interaction.response.defer()
             return
         self.stop()
-        await interaction.response.defer()
         attachments, self.attachments = self.attachments, []
-        try:
-            uploads = await read_uploads(attachments, self.bot.max_media_bytes)
-        except MediaError as error:
-            await interaction.edit_original_response(
-                content=t(str(error), max_media_mb=self.bot.max_media_mb), view=None
-            )
-            return
-        message = await save_tag(self.bot, interaction, name, self.content, uploads, expected)
-        await interaction.edit_original_response(content=message, view=None)
+        await finish_save(self.bot, interaction, name, self.content, attachments, expected)
 
     @discord.ui.button(label=t("action.overwrite"), style=discord.ButtonStyle.danger)
     async def overwrite(self, interaction, button):
