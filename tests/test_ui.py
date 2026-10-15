@@ -1,3 +1,4 @@
+import itertools
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -10,6 +11,13 @@ from uglytags import ui
 from uglytags.bot import UglyTags, parse_import_limits
 from uglytags.transfer import ImportLimits
 from uglytags.ui import TagModal, format_size, name_candidates, save_tag, send_export
+
+MESSAGE_IDS = itertools.count(1000)
+
+
+@pytest.fixture(autouse=True)
+def clear_replies():
+    ui.render.REPLIES.entries.clear()
 
 
 def tag(**overrides):
@@ -75,10 +83,11 @@ def prefix_message(content, user_id=2, attachments=None, **permissions):
         get_member_named=lambda name: author if name == author.display_name else None,
     )
     return SimpleNamespace(
+        id=next(MESSAGE_IDS),
         content=content,
         author=author,
         guild=guild,
-        channel=SimpleNamespace(send=AsyncMock(return_value=AsyncMock())),
+        channel=SimpleNamespace(id=5, send=AsyncMock(return_value=AsyncMock())),
         attachments=attachments or [],
         embeds=[],
         reference=None,
@@ -1272,3 +1281,125 @@ async def test_info_previews_privately_without_counting_a_use():
     assert sent["embeds"][0].title == "bacon"
     assert "`a.mp4`" in sent["embeds"][0].fields[0].value
     await bot.close()
+
+
+def edited(message, content, minutes=1):
+    message.content = content
+    message.created_at = datetime.now(UTC) - timedelta(minutes=minutes + 1)
+    message.edited_at = message.created_at + timedelta(minutes=minutes)
+    return message
+
+
+async def test_edited_command_edits_its_earlier_reply():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    message = prefix_message(".t first")
+    sent = message.reply.return_value
+    await ui.handle_prefix_message(bot, message)
+    message.reply.assert_awaited_once()
+
+    await ui.handle_prefix_edit(bot, edited(message, ".t second"), None)
+    message.reply.assert_awaited_once()
+    sent.edit.assert_awaited_once()
+    assert sent.edit.await_args.kwargs["content"] == ui.t("error.unknown_tag")
+
+    await ui.handle_prefix_edit(bot, edited(message, ".t second"), None)
+    sent.edit.assert_awaited_once()
+    await bot.close()
+
+
+async def test_edit_replaces_reply_that_can_no_longer_be_edited():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    message = prefix_message(".t first")
+    old = message.reply.return_value
+    old.edit.side_effect = discord.HTTPException(SimpleNamespace(status=400, reason=""), "bad")
+    await ui.handle_prefix_message(bot, message)
+    await ui.handle_prefix_edit(bot, edited(message, ".t second"), None)
+    old.delete.assert_awaited_once()
+    assert message.reply.await_count == 2
+    await bot.close()
+
+
+async def test_edit_ignores_late_edits_and_unchanged_content():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    message = prefix_message(".t first")
+    await ui.handle_prefix_edit(bot, edited(message, ".t second", minutes=16), None)
+    await ui.handle_prefix_edit(bot, edited(message, ".t second"), ".t second")
+    message.reply.assert_not_awaited()
+    await bot.close()
+
+
+async def test_editing_a_command_into_text_removes_the_reply():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    message = prefix_message(".t first")
+    sent = message.reply.return_value
+    await ui.handle_prefix_message(bot, message)
+    await ui.handle_prefix_edit(bot, edited(message, "never mind"), None)
+    sent.delete.assert_awaited_once()
+    assert ui.render.REPLIES.get(message.id) is None
+    await bot.close()
+
+
+async def test_deleting_a_command_removes_the_reply():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    message = prefix_message(".t first")
+    sent = message.reply.return_value
+    await ui.handle_prefix_message(bot, message)
+    await ui.handle_prefix_delete(message.id)
+    sent.delete.assert_awaited_once()
+    await ui.handle_prefix_delete(message.id)
+    sent.delete.assert_awaited_once()
+    await bot.close()
+
+
+async def test_undo_deletes_your_last_replies_and_commands():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    commands = [prefix_message(f".t tag{number}") for number in range(3)]
+    for command in commands:
+        await ui.handle_prefix_message(bot, command)
+    other = prefix_message(".t other", user_id=9)
+    await ui.handle_prefix_message(bot, other)
+
+    undo = prefix_message(".undo 2")
+    partial = SimpleNamespace(delete=AsyncMock())
+    undo.channel.get_partial_message = MagicMock(return_value=partial)
+    undo.channel.permissions_for = lambda member: discord.Permissions(manage_messages=True)
+    undo.guild.me = object()
+    assert await ui.handle_prefix_message(bot, undo)
+
+    assert commands[2].reply.return_value.delete.await_count == 1
+    assert commands[1].reply.return_value.delete.await_count == 1
+    commands[0].reply.return_value.delete.assert_not_awaited()
+    other.reply.return_value.delete.assert_not_awaited()
+    assert partial.delete.await_count == 2
+    assert "2 commands" in undo.reply.await_args.args[0]
+    assert undo.reply.await_args.kwargs["delete_after"] == ui.UNDO_NOTICE_SECONDS
+
+    again = prefix_message(".undo")
+    again.channel.permissions_for = lambda member: discord.Permissions.none()
+    again.guild.me = object()
+    await ui.handle_prefix_message(bot, again)
+    assert commands[0].reply.return_value.delete.await_count == 1
+    assert "Successfully deleted 1 commands" in again.reply.await_args.args[0]
+    await ui.handle_prefix_message(bot, again)
+    assert again.reply.await_args.args[0] == ui.t("undo.none")
+
+    usage = prefix_message(".undo many")
+    await ui.handle_prefix_message(bot, usage)
+    assert "Usage:" in usage.reply.await_args.args[0]
+    await bot.close()
+
+
+async def test_failed_edit_resends_files_from_the_start():
+    message = prefix_message(".t first")
+    old = AsyncMock()
+
+    async def fail(**kwargs):
+        for file in kwargs["attachments"]:
+            file.fp.read()
+        raise discord.HTTPException(SimpleNamespace(status=400, reason=""), "bad")
+
+    old.edit.side_effect = fail
+    ui.render.REPLIES.put(message, old, None)
+    file = ui.render.to_discord_file(ui.tagscript.TagFile("data", "a.txt"))
+    await ui.render.respond(message, "hi", files=[file])
+    assert message.reply.await_args.kwargs["files"][0].fp.read() == b"data"

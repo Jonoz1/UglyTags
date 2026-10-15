@@ -35,6 +35,8 @@ CONFIRM_TIMEOUT = 300
 REMOVE_ALL_TIMEOUT = 120
 LIST_PAGE_SIZE = 25
 DETAIL_PAGE_SIZE = 10
+MAX_UNDO = 5
+UNDO_NOTICE_SECONDS = 5
 PERIODS = (0, 7, 30, 365)
 SORTS = ("most", "least", "recent", "unused", "newest", "oldest")
 PREFIX_COMMANDS = {
@@ -699,12 +701,29 @@ def scope_text(user) -> str:
 
 
 async def prefix_reply(message: discord.Message, content: str, **kwargs):
-    return await message.reply(
-        content,
-        mention_author=False,
-        allowed_mentions=discord.AllowedMentions.none(),
-        **kwargs,
-    )
+    return await render.respond(message, content, **kwargs)
+
+
+async def handle_prefix_edit(bot, message: discord.Message, before: str | None):
+    """Rerun an edited command, updating its earlier reply instead of sending a new one."""
+    if message.guild is None or message.author.bot or message.edited_at is None:
+        return
+    if (message.edited_at - message.created_at).total_seconds() > render.REPLY_WINDOW:
+        return
+    async with render.REPLIES.guard(message.id):
+        entry = render.REPLIES.get(message.id)
+        if entry is not None:
+            before = entry.content
+        if before == message.content:
+            return
+        await handle_prefix_message(bot, message)
+        if entry is not None and render.REPLIES.get(message.id) is entry:
+            await render.REPLIES.discard(message.id)
+
+
+async def handle_prefix_delete(message_id: int):
+    async with render.REPLIES.guard(message_id):
+        await render.REPLIES.discard(message_id)
 
 
 async def prefix_uploads(bot, message: discord.Message, attachments=None):
@@ -715,9 +734,52 @@ async def prefix_uploads(bot, message: discord.Message, attachments=None):
     return attachments
 
 
+async def prefix_undo(message: discord.Message, value: str):
+    amount = value.strip() or "1"
+    if not amount.isdecimal():
+        await prefix_reply(message, t("prefix.usage", usage=".undo [amount]"))
+        return
+    amount = max(1, min(int(amount), MAX_UNDO))
+    can_delete = message.channel.permissions_for(message.guild.me).manage_messages
+    deleted = failed = 0
+    for command_id in render.REPLIES.latest(message.author.id, message.channel.id, amount):
+        async with render.REPLIES.guard(command_id):
+            if not await render.REPLIES.discard(command_id):
+                continue
+        deleted += 1
+        if can_delete:
+            try:
+                await message.channel.get_partial_message(command_id).delete()
+            except discord.NotFound:
+                pass
+            except discord.HTTPException:
+                failed += 1
+    if not deleted:
+        await message.reply(
+            t("undo.none"),
+            mention_author=False,
+            allowed_mentions=discord.AllowedMentions.none(),
+            delete_after=UNDO_NOTICE_SECONDS,
+        )
+        return
+    text = t("undo.done", count=deleted)
+    if failed:
+        text = t("undo.failed", text=text, failed=failed)
+    await message.reply(
+        text,
+        mention_author=False,
+        allowed_mentions=discord.AllowedMentions.none(),
+        delete_after=UNDO_NOTICE_SECONDS,
+    )
+
+
 async def handle_prefix_message(bot, message: discord.Message) -> bool:
     if message.guild is None or message.author.bot:
         return False
+    undo = re.match(r"^\.undo(?:\s+(.*))?$", message.content, re.IGNORECASE | re.DOTALL)
+    if undo:
+        await prefix_undo(message, undo[1] or "")
+        return True
     match = re.match(r"^\.(t|tag)(?:\s+(.*))?$", message.content, re.IGNORECASE | re.DOTALL)
     if match is None:
         return False
