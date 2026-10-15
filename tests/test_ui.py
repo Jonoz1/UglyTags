@@ -1493,3 +1493,8 @@ async def test_undo_keeps_leading_zero_amounts():
     await ui.handle_prefix_message(bot, undo)
     assert "5 commands" in undo.reply.await_args.args[0]
     await bot.close()
+
+
+def test_raw_edit_event_carries_the_updated_message():
+    assert "message" in discord.RawMessageUpdateEvent.__slots__
+    assert "cached_message" in discord.RawMessageUpdateEvent.__slots__
