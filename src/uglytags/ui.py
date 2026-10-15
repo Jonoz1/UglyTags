@@ -282,14 +282,6 @@ async def execute(
     lead_embed=None,
     reply_message: discord.Message | None = None,
 ):
-    sent = await run_tag(
-        bot, interaction, tag, arguments, attachment, title, lead_embed, reply_message
-    )
-    if sent is not None and lead_embed is None:
-        render.REPLIES.put_interaction(interaction, sent)
-
-
-async def run_tag(bot, interaction, tag, arguments, attachment, title, lead_embed, reply_message):
     preview = lead_embed is not None
     lead = [lead_embed] if preview else []
     if not interaction.response.is_done():
@@ -299,11 +291,12 @@ async def run_tag(bot, interaction, tag, arguments, attachment, title, lead_embe
     if is_group(tag):
         tag = await bot.db.random_member(target_id(tag))
         if tag is None:
-            return await render.send_error(
+            await render.send_error(
                 interaction,
                 "\n\n".join(part for part in (title, t("error.group_empty")) if part),
                 lead,
             )
+            return
         if not preview:
             await bot.db.use(tag, interaction.guild_id, interaction.user.id)
     rt = tagscript.Runtime(
@@ -319,10 +312,11 @@ async def run_tag(bot, interaction, tag, arguments, attachment, title, lead_embe
     try:
         result = await tagscript.parse(rt, tag_content(tag), arguments)
     except tagscript.TagError as error:
-        return await render.send_error(
+        await render.send_error(
             interaction, "\n\n".join(part for part in (title, str(error)) if part), lead
         )
-    return await render.send_result(interaction, rt, result, title, lead_embed, reply_message)
+        return
+    await render.send_result(interaction, rt, result, title, lead_embed, reply_message)
 
 
 async def execute_message(
@@ -743,7 +737,9 @@ async def handle_prefix_edit(bot, message: discord.Message, before: str | None):
 
 
 async def handle_prefix_delete(message_id: int):
+    """A deleted command removes its reply; a deleted reply is no longer tracked."""
     if render.REPLIES.get(message_id) is None and message_id not in render.REPLIES.locks:
+        render.REPLIES.forget_reply(message_id)
         return
     async with render.REPLIES.guard(message_id):
         await render.REPLIES.discard(message_id)
@@ -763,10 +759,11 @@ async def undo_commands(channel, me, user_id: int, amount: int, exclude_id: int 
     Returns the notice text and whether the bot can delete the user's messages."""
     can_delete = channel.permissions_for(me).manage_messages
     prefixed = interactions = failed = 0
-    latest = render.REPLIES.latest(user_id, channel.id, amount + 1)
-    for command_id in [found for found in latest if found != exclude_id][:amount]:
+    for command_id in render.REPLIES.latest(user_id, channel.id):
+        if prefixed + interactions + failed >= amount:
+            break
         entry = render.REPLIES.get(command_id)
-        if entry is None or command_id in render.REPLIES.locks:
+        if entry is None or command_id == exclude_id or command_id in render.REPLIES.locks:
             continue
         if not await render.REPLIES.discard(command_id):
             failed += 1
@@ -1538,11 +1535,10 @@ def register_commands(bot):
             interaction.guild_id, name=name, content=content, owner_id=user and user.id
         )
         if tag is None:
-            sent = await render.send_error(
+            await render.send_error(
                 interaction,
                 t("error.no_matching_tags" if content or name or user else "error.no_tags"),
             )
-            render.REPLIES.put_interaction(interaction, sent)
             return
         title = t("show.random_title", name=code(tag["name"]))
         await execute(bot, interaction, tag, arguments or "", attachment, title)

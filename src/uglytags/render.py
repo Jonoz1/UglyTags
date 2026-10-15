@@ -559,9 +559,10 @@ async def send_result(
     try:
         prepared = prepare(rt, result, title, interaction.edit_original_response, reply_message)
     except tagscript.TagError as error:
-        return await send_error(
+        await send_error(
             interaction, "\n\n".join(part for part in (title, str(error)) if part), lead
         )
+        return
     separate_lead = bool(lead) and isinstance(prepared.view, discord.ui.LayoutView | Paginator)
     if lead and not separate_lead:
         prepared.embeds = lead + prepared.embeds[:9]
@@ -583,22 +584,29 @@ async def send_result(
             message = t("error.too_large")
         else:
             message = t("error.send", error=error.text or error.status)
-        return await send_error(interaction, message, lead)
+        await send_error(interaction, message, lead)
+        return
     if separate_lead:
         await interaction.followup.send(embed=lead_embed, ephemeral=True)
-    return sent
+    if lead_embed is None:
+        REPLIES.put_interaction(interaction, sent, prepared.view)
 
 
 async def send_error(interaction: discord.Interaction, message: str, embeds=()):
-    return await interaction.edit_original_response(
+    """Show a tag error. Private previews pass their lead embed; public output passes
+    none and is tracked so undo can remove it."""
+    sent = await interaction.edit_original_response(
         content=message[:2000],
         embeds=list(embeds),
         attachments=[],
         view=delete_view(interaction.user.id),
     )
+    if not embeds:
+        REPLIES.put_interaction(interaction, sent)
 
 
 REPLY_WINDOW = 15 * 60
+TOKEN_MARGIN = 30
 MAX_TRACKED_REPLIES = 1000
 
 
@@ -650,18 +658,23 @@ class ReplyTracker:
             ),
         )
 
-    def put_interaction(self, interaction: discord.Interaction, sent: discord.Message) -> None:
+    def put_interaction(self, interaction: discord.Interaction, sent, view=None) -> None:
         """Track a public slash command response so undo can remove it.
 
         It is deleted through the interaction token, which works even where the bot
-        cannot view the channel, so tracking ends when the token expires."""
+        cannot view the channel, so tracking ends shortly before the token expires."""
         age = (discord.utils.utcnow() - interaction.created_at).total_seconds()
         self.store(
             interaction.id,
             TrackedReply(
-                sent, None, "", interaction.user.id, interaction.channel_id, prefixed=False
+                sent,
+                weakref.ref(view) if view is not None else None,
+                "",
+                interaction.user.id,
+                interaction.channel_id,
+                prefixed=False,
             ),
-            REPLY_WINDOW - age,
+            REPLY_WINDOW - TOKEN_MARGIN - age,
         )
 
     def store(self, key: int, entry: TrackedReply, lifetime: float = REPLY_WINDOW) -> None:
@@ -689,15 +702,23 @@ class ReplyTracker:
         entry.stop_view()
         return True
 
-    def latest(self, author_id: int, channel_id: int, count: int) -> list[int]:
-        found = []
-        for message_id in sorted(self.entries, reverse=True):
-            entry = self.get(message_id)
-            if entry and entry.author_id == author_id and entry.channel_id == channel_id:
-                found.append(message_id)
-                if len(found) == count:
-                    break
-        return found
+    def forget_reply(self, reply_id: int) -> None:
+        """Stop tracking a reply that was deleted some other way."""
+        for key, entry in self.entries.items():
+            if entry.reply.id == reply_id:
+                del self.entries[key]
+                entry.stop_view()
+                return
+
+    def latest(self, author_id: int, channel_id: int) -> list[int]:
+        """A user's tracked commands in a channel, newest first."""
+        return [
+            key
+            for key in sorted(self.entries, reverse=True)
+            if (entry := self.get(key))
+            and entry.author_id == author_id
+            and entry.channel_id == channel_id
+        ]
 
     @contextlib.asynccontextmanager
     async def guard(self, message_id: int):

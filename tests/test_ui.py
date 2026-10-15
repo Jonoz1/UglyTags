@@ -1657,3 +1657,64 @@ async def test_slash_tracking_ends_when_the_interaction_token_expires():
     late.created_at = datetime.now(UTC) - timedelta(minutes=16)
     ui.render.REPLIES.put_interaction(late, AsyncMock())
     assert ui.render.REPLIES.get(late.id) is None
+
+
+async def test_deleted_replies_stop_counting_for_undo():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    older, newer = prefix_message(".t a"), prefix_message(".t b")
+    for command_message in (older, newer):
+        await ui.handle_prefix_message(bot, command_message)
+    newer_reply = newer.reply.return_value
+    newer_reply.id = next(MESSAGE_IDS)
+    await ui.handle_prefix_delete(newer_reply.id)
+    assert ui.render.REPLIES.get(newer.id) is None
+
+    undo = prefix_message(".undo")
+    undo.channel.permissions_for = lambda member: discord.Permissions.none()
+    undo.guild.me = object()
+    await ui.handle_prefix_message(bot, undo)
+    older.reply.return_value.delete.assert_awaited_once()
+    newer_reply.delete.assert_not_awaited()
+    await bot.close()
+
+
+async def test_undo_fills_the_amount_past_skipped_commands():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    commands = [prefix_message(f".t t{number}") for number in range(3)]
+    for command_message in commands:
+        await ui.handle_prefix_message(bot, command_message)
+    undo = prefix_message(".undo 2")
+    undo.channel.permissions_for = lambda member: discord.Permissions.none()
+    undo.guild.me = object()
+    async with ui.render.REPLIES.guard(commands[2].id):
+        await ui.handle_prefix_message(bot, undo)
+    commands[2].reply.return_value.delete.assert_not_awaited()
+    commands[1].reply.return_value.delete.assert_awaited_once()
+    commands[0].reply.return_value.delete.assert_awaited_once()
+    await bot.close()
+
+
+async def test_random_without_tags_is_undoable():
+    bot = stats_bot(random=AsyncMock(return_value=None))
+    channel = prefix_message(".t a").channel
+    event = slash_event(channel)
+    await command(bot, "random")(event, None, None, None, None, None)
+    assert ui.render.REPLIES.get(event.id) is not None
+    await bot.close()
+
+
+async def test_undoing_slash_output_stops_its_view():
+    channel = prefix_message(".t a").channel
+    event = slash_event(channel)
+    view = discord.ui.View()
+    ui.render.REPLIES.put_interaction(event, AsyncMock(), view)
+    assert await ui.render.REPLIES.discard(event.id)
+    assert view.is_finished()
+
+
+def test_slash_tracking_stops_before_the_token_expires():
+    channel = prefix_message(".t a").channel
+    event = slash_event(channel)
+    event.created_at = datetime.now(UTC) - timedelta(seconds=ui.render.REPLY_WINDOW - 10)
+    ui.render.REPLIES.put_interaction(event, AsyncMock())
+    assert ui.render.REPLIES.get(event.id) is None

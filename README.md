@@ -48,8 +48,8 @@ delete button is left out.
   `/tag random`, and tag reply). The amount is 1 to 5, default 1, and only commands
   from the last 15 minutes since the last restart count. When the bot has Manage
   Messages it also deletes your chat command messages and the `.undo` message itself,
-  and a short notice ("Successfully deleted N commands.") disappears after one
-  second; without it the notice replies to `.undo`. Editing an `.undo` message runs
+  and a short notice saying how many commands and slash interactions were deleted
+  disappears after one second; without it the notice replies to `.undo`. Editing an `.undo` message runs
   it again. Unlike NotSoBot it does not reach commands older than 15 minutes.
 - **Apps > tag reply**: right-click a message (or long-press on mobile)
   and choose this shortcut (prefixed with a speech-bubble icon). A private form offers your 25 most recently used tags in
