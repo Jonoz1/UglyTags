@@ -62,6 +62,7 @@ def interaction(user_id=2, **permissions):
         guild_permissions=discord.Permissions(**permissions),
     )
     return SimpleNamespace(
+        id=next(MESSAGE_IDS),
         guild_id=1,
         user=user,
         response=response,
@@ -89,7 +90,11 @@ def prefix_message(content, user_id=2, attachments=None, **permissions):
         content=content,
         author=author,
         guild=guild,
-        channel=SimpleNamespace(id=5, send=AsyncMock(return_value=AsyncMock())),
+        channel=SimpleNamespace(
+            id=5,
+            send=AsyncMock(return_value=AsyncMock()),
+            get_partial_message=MagicMock(return_value=AsyncMock()),
+        ),
         attachments=attachments or [],
         embeds=[],
         reference=None,
@@ -534,6 +539,7 @@ async def test_tag_reply_submission_posts_publicly_and_counts_usage(monkeypatch)
     event.guild = target.guild
     event.channel = target.channel
     event.channel_id = target.channel.id
+    target.channel.get_partial_message = MagicMock()
     event.filesize_limit = 20_000_000
     event.edit_original_response = AsyncMock()
     await modal.on_submit(event)
@@ -1053,7 +1059,9 @@ async def test_showing_group_runs_random_member():
     bot = group_bot({"cats": cats})
     bot.db.random_member.return_value = tag(id=20, name="cat1", content="meow")
     event = interaction()
-    event.guild, event.channel, event.filesize_limit = None, None, 10_000_000
+    event.guild, event.filesize_limit = None, 10_000_000
+    event.channel = SimpleNamespace(id=5, get_partial_message=MagicMock())
+    event.channel_id = 5
     event.edit_original_response = AsyncMock()
     await command_t(bot)(event, "cats", None, None)
     bot.db.random_member.assert_awaited_once_with(30)
@@ -1273,7 +1281,9 @@ async def test_info_previews_privately_without_counting_a_use():
         close=AsyncMock(),
     )
     event = interaction()
-    event.guild, event.channel, event.filesize_limit = None, None, 10_000_000
+    event.guild, event.filesize_limit = None, 10_000_000
+    event.channel = SimpleNamespace(id=5, get_partial_message=MagicMock())
+    event.channel_id = 5
     event.edit_original_response = AsyncMock()
     await command(bot, "info")(event, "bacon", "strips", None)
     assert event.response.defer.await_args.kwargs["ephemeral"]
@@ -1582,4 +1592,58 @@ async def test_undo_skips_commands_being_edited_without_waiting():
         await asyncio.wait_for(ui.handle_prefix_message(bot, undo), 2)
     busy.reply.return_value.delete.assert_not_awaited()
     idle.reply.return_value.delete.assert_awaited_once()
+    await bot.close()
+
+
+def slash_event(channel, user_id=2):
+    event = interaction(user_id)
+    event.channel, event.channel_id = channel, channel.id
+    event.guild = SimpleNamespace(id=1, me=object(), filesize_limit=20_000_000)
+    event.filesize_limit = 20_000_000
+    event.edit_original_response = AsyncMock(return_value=SimpleNamespace(id=next(MESSAGE_IDS)))
+    return event
+
+
+async def test_slash_tag_responses_are_tracked_and_undone_with_prefix_commands():
+    bot = stats_bot(use=AsyncMock())
+    command = prefix_message(".t a")
+    await ui.render.respond(command, "reply")
+    channel = command.channel
+    channel.permissions_for = lambda member: discord.Permissions.none()
+    slash = slash_event(channel)
+    await ui.execute(bot, slash, tag(content="hello"), "", None)
+    tracked = ui.render.REPLIES.get(slash.id)
+    assert tracked is not None and not tracked.prefixed
+    response = channel.get_partial_message.return_value
+
+    preview = slash_event(channel)
+    await ui.execute(bot, preview, tag(content="hello"), "", None, lead_embed=discord.Embed())
+    assert ui.render.REPLIES.get(preview.id) is None
+
+    undo = prefix_message(".undo 3")
+    undo.channel = channel
+    undo.guild.me = object()
+    await ui.handle_prefix_message(bot, undo)
+    response.delete.assert_awaited_once()
+    command.reply.return_value.delete.assert_awaited_once()
+    assert undo.reply.await_args.args[0] == ui.t("undo.done_both", interactions=1, prefixed=1)
+    await bot.close()
+
+
+async def test_slash_undo_replies_privately():
+    bot = stats_bot(use=AsyncMock())
+    channel = prefix_message(".t a").channel
+    channel.permissions_for = lambda member: discord.Permissions.none()
+    shown = slash_event(channel)
+    await ui.execute(bot, shown, tag(content="hello"), "", None)
+    event = slash_event(channel)
+    await command(bot, "undo")(event, 1)
+    event.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+    sent = event.followup.send.await_args
+    assert sent.args[0] == ui.t("undo.done_interactions", interactions=1)
+    assert sent.kwargs["ephemeral"]
+
+    again = slash_event(channel)
+    await command(bot, "undo")(again, 1)
+    assert again.followup.send.await_args.args[0] == ui.t("undo.none")
     await bot.close()

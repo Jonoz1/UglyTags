@@ -559,10 +559,9 @@ async def send_result(
     try:
         prepared = prepare(rt, result, title, interaction.edit_original_response, reply_message)
     except tagscript.TagError as error:
-        await send_error(
+        return await send_error(
             interaction, "\n\n".join(part for part in (title, str(error)) if part), lead
         )
-        return
     separate_lead = bool(lead) and isinstance(prepared.view, discord.ui.LayoutView | Paginator)
     if lead and not separate_lead:
         prepared.embeds = lead + prepared.embeds[:9]
@@ -575,7 +574,7 @@ async def send_result(
                 users=[reply_message.author] if not reply_message.author.bot else False,
                 replied_user=False,
             )
-        await interaction.edit_original_response(**kwargs)
+        sent = await interaction.edit_original_response(**kwargs)
     except discord.HTTPException as error:
         log.warning("Tag response failed: %s", error)
         if prepared.view:
@@ -584,14 +583,14 @@ async def send_result(
             message = t("error.too_large")
         else:
             message = t("error.send", error=error.text or error.status)
-        await send_error(interaction, message, lead)
-        return
+        return await send_error(interaction, message, lead)
     if separate_lead:
         await interaction.followup.send(embed=lead_embed, ephemeral=True)
+    return sent
 
 
 async def send_error(interaction: discord.Interaction, message: str, embeds=()):
-    await interaction.edit_original_response(
+    return await interaction.edit_original_response(
         content=message[:2000],
         embeds=list(embeds),
         attachments=[],
@@ -610,7 +609,8 @@ class TrackedReply:
     content: str
     author_id: int
     channel_id: int
-    expires: float
+    expires: float = 0.0
+    prefixed: bool = True
 
     def stop_view(self) -> None:
         view = self.view() if self.view is not None else None
@@ -639,18 +639,38 @@ class ReplyTracker:
         return entry
 
     def put(self, message: discord.Message, reply: discord.Message, view) -> None:
-        now = time.monotonic()
-        self.entries.pop(message.id, None)
-        self.entries[message.id] = TrackedReply(
-            reply,
-            weakref.ref(view) if view is not None else None,
-            message.content,
-            message.author.id,
-            message.channel.id,
-            now + REPLY_WINDOW,
+        self.store(
+            message.id,
+            TrackedReply(
+                reply,
+                weakref.ref(view) if view is not None else None,
+                message.content,
+                message.author.id,
+                message.channel.id,
+            ),
         )
-        for message_id in [key for key, entry in self.entries.items() if entry.expires <= now]:
-            del self.entries[message_id]
+
+    def put_interaction(self, interaction: discord.Interaction, sent: discord.Message) -> None:
+        """Track a public slash command response so undo can remove it."""
+        self.store(
+            interaction.id,
+            TrackedReply(
+                interaction.channel.get_partial_message(sent.id),
+                None,
+                "",
+                interaction.user.id,
+                interaction.channel_id,
+                prefixed=False,
+            ),
+        )
+
+    def store(self, key: int, entry: TrackedReply) -> None:
+        now = time.monotonic()
+        entry.expires = now + REPLY_WINDOW
+        self.entries.pop(key, None)
+        self.entries[key] = entry
+        for expired in [item for item, value in self.entries.items() if value.expires <= now]:
+            del self.entries[expired]
         while len(self.entries) > MAX_TRACKED_REPLIES:
             del self.entries[next(iter(self.entries))]
 
