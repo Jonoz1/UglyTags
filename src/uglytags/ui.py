@@ -463,7 +463,7 @@ async def confirm_save(bot, interaction, name, content, uploads, expected):
 
 def name_candidates(name: str, count: int = 100) -> list[str]:
     match = re.fullmatch(r"(.*?)(\d+)", name, re.DOTALL)
-    base, start = (match[1], int(match[2]) + 1) if match else (name, 1)
+    base, start = (match[1], max(int(match[2]) + 1, 2)) if match else (name, 2)
     candidates = []
     for number in range(start, start + count):
         suffix = str(number)
@@ -471,7 +471,7 @@ def name_candidates(name: str, count: int = 100) -> list[str]:
     return candidates
 
 
-async def available_names(bot, guild_id: int, name: str, count: int = 2) -> list[str]:
+async def available_names(bot, guild_id: int, name: str, count: int = 3) -> list[str]:
     candidates = name_candidates(name)
     taken = await bot.db.taken_names(guild_id, candidates)
     free = [candidate for candidate in candidates if candidate.lower() not in taken][:count]
@@ -553,13 +553,13 @@ class CreateConflict(OwnedView):
             self.remove_item(self.overwrite)
 
     async def save(self, interaction: discord.Interaction, name: str, expected: dict | None):
+        if self.is_finished():
+            await interaction.response.defer()
+            return
         if self.content is None:
             await interaction.response.send_modal(
                 TagModal(self.bot, interaction.guild_id, self.owner_id, name, expected)
             )
-            return
-        if self.is_finished():
-            await interaction.response.defer()
             return
         self.stop()
         attachments, self.attachments = self.attachments, []
@@ -999,10 +999,13 @@ async def prefix_create(bot, message: discord.Message, value: str):
             if isinstance(source, discord.DeletedReferencedMessage):
                 await prefix_reply(message, t("error.create_reply"))
                 return
+            if source.message_snapshots and not (source.content or source.attachments):
+                source = source.message_snapshots[0]
             text = "" if source.attachments else source.content.strip()
             urls = [
                 media.url
                 for embed in source.embeds
+                if embed.type == "rich"
                 for media in (embed.image, embed.thumbnail, embed.video)
                 if media.url and media.url not in text
             ]
