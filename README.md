@@ -48,8 +48,8 @@ delete button is left out.
   since the last restart). When the bot has Manage Messages it also deletes your
   command messages and the `.undo` message itself, and a short notice ("Successfully
   deleted N commands.") disappears after one second; without it the notice replies
-  to `.undo`. Editing an `.undo` message runs it again. Unlike NotSoBot it does not cover slash command responses or older
-  commands.
+  to `.undo`. Editing an `.undo` message runs it again. Unlike NotSoBot it does not
+  cover slash command responses or older commands.
 - **Apps > tag reply**: right-click a message (or long-press on mobile)
   and choose this shortcut (prefixed with a speech-bubble icon). A private form offers your 25 most recently used tags in
   this server, newest first, with optional arguments and one attachment. Submitting

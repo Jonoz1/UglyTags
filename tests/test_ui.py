@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import itertools
 import json
 from datetime import UTC, datetime, timedelta
@@ -1323,7 +1324,8 @@ async def test_edit_replaces_reply_that_can_no_longer_be_edited():
 async def test_edit_ignores_late_edits_and_unchanged_content():
     bot = stats_bot(get_tag=AsyncMock(return_value=None))
     message = prefix_message(".t first")
-    await ui.handle_prefix_edit(bot, edited(message, ".t second", minutes=16), None)
+    assert not ui.is_current_edit(edited(message, ".t second", minutes=16))
+    assert ui.is_current_edit(edited(message, ".t second"))
     await ui.handle_prefix_edit(bot, edited(message, ".t second"), ".t second")
     message.reply.assert_not_awaited()
     await bot.close()
@@ -1431,13 +1433,18 @@ async def test_undo_with_a_huge_number_clamps_instead_of_failing():
 
 
 async def test_stale_update_events_do_not_rerun_commands():
-    bot = stats_bot(get_tag=AsyncMock(return_value=None))
     message = edited(prefix_message(".t first"), ".t first")
+    assert ui.is_current_edit(message)
     message.edited_at -= timedelta(minutes=5)
     message.created_at -= timedelta(minutes=5)
-    await ui.handle_prefix_edit(bot, message, None)
-    message.reply.assert_not_awaited()
-    await bot.close()
+    assert not ui.is_current_edit(message)
+
+
+async def test_edits_of_untracked_non_commands_are_ignored():
+    assert not ui.is_current_edit(edited(prefix_message("hello"), "hello world"))
+    assert ui.is_current_edit(edited(prefix_message("hello"), ".undo"))
+    assert ui.is_prefix_command(".T x") and ui.is_prefix_command(".undo 2")
+    assert not ui.is_prefix_command(".undoing") and not ui.is_prefix_command("hi")
 
 
 async def test_list_reply_without_a_view_can_be_edited_and_deleted():
@@ -1498,3 +1505,81 @@ async def test_undo_keeps_leading_zero_amounts():
 def test_raw_edit_event_carries_the_updated_message():
     assert "message" in discord.RawMessageUpdateEvent.__slots__
     assert "cached_message" in discord.RawMessageUpdateEvent.__slots__
+
+
+def payload_for(message, before=None):
+    cached = SimpleNamespace(content=before) if before is not None else None
+    return SimpleNamespace(message=message, cached_message=cached, message_id=message.id)
+
+
+async def test_bot_event_handlers_route_messages_edits_and_deletes():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    message = prefix_message(".t first")
+    sent = message.reply.return_value
+    await bot.on_message(prefix_message("not a command"))
+    await bot.on_message(message)
+    message.reply.assert_awaited_once()
+
+    await bot.on_raw_message_edit(payload_for(edited(message, "plain text"), ".t first"))
+    sent.delete.assert_awaited_once()
+
+    again = prefix_message(".t one")
+    await bot.on_message(again)
+    await bot.on_raw_message_delete(SimpleNamespace(message_id=again.id))
+    again.reply.return_value.delete.assert_awaited_once()
+
+    many = [prefix_message(".t a"), prefix_message(".t b")]
+    for item in many:
+        await bot.on_message(item)
+    await bot.on_raw_bulk_message_delete(SimpleNamespace(message_ids={item.id for item in many}))
+    for item in many:
+        item.reply.return_value.delete.assert_awaited_once()
+    assert not ui.render.REPLIES.locks
+    await bot.close()
+
+
+async def test_prefix_failures_reply_inside_the_message_guard(monkeypatch):
+    bot = stats_bot()
+    message = prefix_message(".t first")
+    monkeypatch.setattr(ui, "prefix_show", AsyncMock(side_effect=RuntimeError("boom")))
+    await bot.on_message(message)
+    assert message.reply.await_args.args[0] == ui.t("error.generic")
+    assert not ui.render.REPLIES.locks
+    await bot.close()
+
+
+async def test_tracker_holds_views_weakly_and_evicts_by_age_and_count(monkeypatch):
+    tracker = ui.render.ReplyTracker()
+    message = prefix_message(".t first")
+    view = discord.ui.View()
+    tracker.put(message, AsyncMock(), view)
+    entry = tracker.get(message.id)
+    assert entry.view() is view
+    del view
+    gc.collect()
+    entry.stop_view()
+
+    monkeypatch.setattr(ui.render, "MAX_TRACKED_REPLIES", 2)
+    others = [prefix_message(".t x") for _ in range(3)]
+    for other in others:
+        tracker.put(other, AsyncMock(), None)
+    assert list(tracker.entries) == [other.id for other in others[1:]]
+    now = ui.render.time.monotonic()
+    monkeypatch.setattr(ui.render.time, "monotonic", lambda: now + ui.render.REPLY_WINDOW + 1)
+    tracker.put(message, AsyncMock(), None)
+    assert list(tracker.entries) == [message.id]
+
+
+async def test_undo_skips_commands_being_edited_without_waiting():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    busy, idle = prefix_message(".t a"), prefix_message(".t b")
+    for command in (busy, idle):
+        await ui.handle_prefix_message(bot, command)
+    undo = prefix_message(".undo 2")
+    undo.channel.permissions_for = lambda member: discord.Permissions.none()
+    undo.guild.me = object()
+    async with ui.render.REPLIES.guard(busy.id):
+        await asyncio.wait_for(ui.handle_prefix_message(bot, undo), 2)
+    busy.reply.return_value.delete.assert_not_awaited()
+    idle.reply.return_value.delete.assert_awaited_once()
+    await bot.close()

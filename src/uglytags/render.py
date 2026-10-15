@@ -4,7 +4,7 @@ import io
 import json
 import logging
 import time
-from collections import OrderedDict
+import weakref
 from dataclasses import dataclass, field
 
 import discord
@@ -606,11 +606,16 @@ MAX_TRACKED_REPLIES = 1000
 @dataclass
 class TrackedReply:
     reply: discord.Message
-    view: discord.ui.View | discord.ui.LayoutView | None
+    view: weakref.ref | None
     content: str
     author_id: int
     channel_id: int
     expires: float
+
+    def stop_view(self) -> None:
+        view = self.view() if self.view is not None else None
+        if view is not None:
+            view.stop()
 
 
 class ReplyTracker:
@@ -618,7 +623,7 @@ class ReplyTracker:
     command updates its reply and a deleted command removes it."""
 
     def __init__(self):
-        self.entries: OrderedDict[int, TrackedReply] = OrderedDict()
+        self.entries: dict[int, TrackedReply] = {}
         self.locks: dict[int, list] = {}
 
     def get(self, message_id: int) -> TrackedReply | None:
@@ -635,20 +640,19 @@ class ReplyTracker:
 
     def put(self, message: discord.Message, reply: discord.Message, view) -> None:
         now = time.monotonic()
+        self.entries.pop(message.id, None)
         self.entries[message.id] = TrackedReply(
             reply,
-            view,
+            weakref.ref(view) if view is not None else None,
             message.content,
             message.author.id,
             message.channel.id,
             now + REPLY_WINDOW,
         )
-        self.entries.move_to_end(message.id)
-        while self.entries and (
-            len(self.entries) > MAX_TRACKED_REPLIES
-            or next(iter(self.entries.values())).expires <= now
-        ):
-            self.entries.popitem(last=False)
+        for message_id in [key for key, entry in self.entries.items() if entry.expires <= now]:
+            del self.entries[message_id]
+        while len(self.entries) > MAX_TRACKED_REPLIES:
+            del self.entries[next(iter(self.entries))]
 
     async def discard(self, message_id: int) -> bool:
         """Delete a tracked reply. A reply that cannot be deleted stays tracked."""
@@ -662,8 +666,7 @@ class ReplyTracker:
         except discord.HTTPException:
             self.entries[message_id] = entry
             return False
-        if entry.view is not None:
-            entry.view.stop()
+        entry.stop_view()
         return True
 
     def latest(self, author_id: int, channel_id: int, count: int) -> list[int]:
@@ -699,8 +702,7 @@ async def respond(message: discord.Message, content: str | None = None, **kwargs
     view = None if view is discord.utils.MISSING else view
     previous = REPLIES.take(message.id)
     if previous is not None:
-        if previous.view is not None:
-            previous.view.stop()
+        previous.stop_view()
         embeds = kwargs.get("embeds") or ([kwargs["embed"]] if kwargs.get("embed") else [])
         try:
             sent = await previous.reply.edit(
