@@ -1450,3 +1450,46 @@ async def test_list_reply_without_a_view_can_be_edited_and_deleted():
     await ui.handle_prefix_delete(message.id)
     sent.edit.return_value.delete.assert_awaited_once()
     await bot.close()
+
+
+async def test_edit_without_a_tracked_reply_needs_known_changed_content():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    message = prefix_message(".t first")
+    await ui.handle_prefix_edit(bot, edited(message, ".t first"), None)
+    await ui.handle_prefix_edit(bot, edited(message, ".t first"), ".t first")
+    message.reply.assert_not_awaited()
+    await ui.handle_prefix_edit(bot, edited(message, ".t first"), "oops")
+    message.reply.assert_awaited_once()
+    await bot.close()
+
+
+async def test_undo_picks_replies_by_command_order_and_keeps_failed_deletes():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    older, newer = prefix_message(".t a"), prefix_message(".t b")
+    for command in (older, newer):
+        await ui.handle_prefix_message(bot, command)
+    await ui.handle_prefix_edit(bot, edited(older, ".t c"), None)
+    newer_reply = newer.reply.return_value
+    newer_reply.delete.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason=""), "no")
+
+    undo = prefix_message(".undo")
+    undo.channel.permissions_for = lambda member: discord.Permissions.none()
+    undo.guild.me = object()
+    await ui.handle_prefix_message(bot, undo)
+    newer_reply.delete.assert_awaited_once()
+    assert ui.render.REPLIES.get(newer.id) is not None
+    assert "1 messages could not be deleted" in undo.reply.await_args.args[0]
+    await bot.close()
+
+
+async def test_undo_keeps_leading_zero_amounts():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    commands = [prefix_message(f".t t{number}") for number in range(6)]
+    for command in commands:
+        await ui.handle_prefix_message(bot, command)
+    undo = prefix_message(".undo 00000000000005")
+    undo.channel.permissions_for = lambda member: discord.Permissions.none()
+    undo.guild.me = object()
+    await ui.handle_prefix_message(bot, undo)
+    assert "5 commands" in undo.reply.await_args.args[0]
+    await bot.close()

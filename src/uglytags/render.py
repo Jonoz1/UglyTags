@@ -651,18 +651,24 @@ class ReplyTracker:
             self.entries.popitem(last=False)
 
     async def discard(self, message_id: int) -> bool:
+        """Delete a tracked reply. A reply that cannot be deleted stays tracked."""
         entry = self.take(message_id)
         if entry is None:
             return False
+        try:
+            await entry.reply.delete()
+        except discord.NotFound:
+            pass
+        except discord.HTTPException:
+            self.entries[message_id] = entry
+            return False
         if entry.view is not None:
             entry.view.stop()
-        with contextlib.suppress(discord.HTTPException):
-            await entry.reply.delete()
         return True
 
     def latest(self, author_id: int, channel_id: int, count: int) -> list[int]:
         found = []
-        for message_id in reversed(list(self.entries)):
+        for message_id in sorted(self.entries, reverse=True):
             entry = self.get(message_id)
             if entry and entry.author_id == author_id and entry.channel_id == channel_id:
                 found.append(message_id)

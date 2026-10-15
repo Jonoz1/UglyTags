@@ -717,7 +717,7 @@ async def handle_prefix_edit(bot, message: discord.Message, before: str | None):
         entry = render.REPLIES.get(message.id)
         if entry is not None:
             before = entry.content
-        if before == message.content:
+        if before is None or before == message.content:
             return
         await handle_prefix_message(bot, message)
         if entry is not None and render.REPLIES.get(message.id) is entry:
@@ -742,13 +742,16 @@ async def prefix_undo(message: discord.Message, value: str):
     if not amount.isdecimal():
         await prefix_reply(message, t("prefix.usage", usage=".undo [amount]"))
         return
-    amount = max(1, min(int(amount[:9]), MAX_UNDO))
+    amount = max(1, min(int(amount.lstrip("0")[:9] or "0"), MAX_UNDO))
     can_delete = message.channel.permissions_for(message.guild.me).manage_messages
     deleted = failed = 0
     latest = render.REPLIES.latest(message.author.id, message.channel.id, amount + 1)
     for command_id in [found for found in latest if found != message.id][:amount]:
         async with render.REPLIES.guard(command_id):
+            if render.REPLIES.get(command_id) is None:
+                continue
             if not await render.REPLIES.discard(command_id):
+                failed += 1
                 continue
         deleted += 1
         if can_delete:
@@ -758,7 +761,7 @@ async def prefix_undo(message: discord.Message, value: str):
                 pass
             except discord.HTTPException:
                 failed += 1
-    if not deleted:
+    if not deleted and not failed:
         text = t("undo.none")
     else:
         text = t("undo.done", count=deleted)
