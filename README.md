@@ -34,9 +34,9 @@ delete button is left out.
   Attachments are stored with the tag; links remain links rather than being downloaded
   from external hosts.
   Explicit content or command attachments take priority over the reply. A taken name
-  gets the same choices as `/tag create`: overwrite (when allowed), pick one of three
-  free names (numbered from 2, such as `name2`), or enter a custom name, which is checked
-  again. The create confirmation also has a Rename button.
+  gets the same choices as `/tag create`: overwrite (when allowed), create it as the
+  next free numbered name (from 2, such as `name2`), or enter a custom name, which is
+  checked again. The create confirmation also has a Rename button.
   Use the slash commands for forms, filters, imports, exports, groups,
   statistics, and pruning.
 - `.t search name`: list the server's tags whose names contain `name` (case-insensitive),
