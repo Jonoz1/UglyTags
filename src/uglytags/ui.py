@@ -36,6 +36,7 @@ REMOVE_ALL_TIMEOUT = 120
 LIST_PAGE_SIZE = 25
 DETAIL_PAGE_SIZE = 10
 MAX_UNDO = 5
+EDIT_EVENT_SECONDS = 60
 UNDO_NOTICE_SECONDS = 1
 PERIODS = (0, 7, 30, 365)
 SORTS = ("most", "least", "recent", "unused", "newest", "oldest")
@@ -709,6 +710,8 @@ async def handle_prefix_edit(bot, message: discord.Message, before: str | None):
     if message.guild is None or message.author.bot or message.edited_at is None:
         return
     if (message.edited_at - message.created_at).total_seconds() > render.REPLY_WINDOW:
+        return
+    if (discord.utils.utcnow() - message.edited_at).total_seconds() > EDIT_EVENT_SECONDS:
         return
     async with render.REPLIES.guard(message.id):
         entry = render.REPLIES.get(message.id)

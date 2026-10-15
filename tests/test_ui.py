@@ -1286,8 +1286,8 @@ async def test_info_previews_privately_without_counting_a_use():
 
 def edited(message, content, minutes=1):
     message.content = content
-    message.created_at = datetime.now(UTC) - timedelta(minutes=minutes + 1)
-    message.edited_at = message.created_at + timedelta(minutes=minutes)
+    message.edited_at = datetime.now(UTC)
+    message.created_at = message.edited_at - timedelta(minutes=minutes)
     return message
 
 
@@ -1427,4 +1427,26 @@ async def test_undo_with_a_huge_number_clamps_instead_of_failing():
     message.guild.me = object()
     await ui.handle_prefix_message(bot, message)
     assert message.reply.await_args.args[0] == ui.t("undo.none")
+    await bot.close()
+
+
+async def test_stale_update_events_do_not_rerun_commands():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    message = edited(prefix_message(".t first"), ".t first")
+    message.edited_at -= timedelta(minutes=5)
+    message.created_at -= timedelta(minutes=5)
+    await ui.handle_prefix_edit(bot, message, None)
+    message.reply.assert_not_awaited()
+    await bot.close()
+
+
+async def test_list_reply_without_a_view_can_be_edited_and_deleted():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    message = prefix_message(".t first")
+    await ui.render.respond(message, "one", view=discord.utils.MISSING)
+    sent = message.reply.return_value
+    await ui.render.respond(message, "two", view=discord.utils.MISSING)
+    assert sent.edit.await_args.kwargs["view"] is None
+    await ui.handle_prefix_delete(message.id)
+    sent.edit.return_value.delete.assert_awaited_once()
     await bot.close()

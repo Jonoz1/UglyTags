@@ -689,6 +689,8 @@ REPLIES = ReplyTracker()
 async def respond(message: discord.Message, content: str | None = None, **kwargs):
     """Reply to a command message, or edit the earlier reply if it already has one."""
     sent = None
+    view = kwargs.get("view")
+    view = None if view is discord.utils.MISSING else view
     previous = REPLIES.take(message.id)
     if previous is not None:
         if previous.view is not None:
@@ -699,7 +701,7 @@ async def respond(message: discord.Message, content: str | None = None, **kwargs
                 content=content or None,
                 embeds=embeds,
                 attachments=kwargs.get("files") or [],
-                view=kwargs.get("view"),
+                view=view,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException as error:
@@ -716,7 +718,7 @@ async def respond(message: discord.Message, content: str | None = None, **kwargs
             allowed_mentions=discord.AllowedMentions.none(),
             **kwargs,
         )
-    REPLIES.put(message, sent, kwargs.get("view"))
+    REPLIES.put(message, sent, view)
     return sent
 
 
