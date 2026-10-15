@@ -788,6 +788,9 @@ class PickList(ListView):
         return self
 
     async def pick(self, interaction: discord.Interaction):
+        if self.message and not self.message.flags.ephemeral:
+            # A public list is replaced by the tag's output, so its timeout must not touch it.
+            self.stop()
         await self.run(interaction, self.picker.values[0])
 
     async def on_timeout(self):
@@ -804,6 +807,13 @@ class SearchView(PickList):
     def __init__(self, owner_id: int, make_title, tags: list, search, run):
         super().__init__(owner_id, make_title(len(tags)), tags, run)
         self.make_title, self.search, self.count = make_title, search, len(tags)
+        self.widened = None
+
+    def stop(self):
+        # Reply tracking only knows this view, so stopping it also stops the widened list.
+        super().stop()
+        if self.widened:
+            self.widened.stop()
 
     @discord.ui.button(label=t("action.similar"), style=discord.ButtonStyle.primary, row=1)
     async def similar(self, interaction, button):
@@ -812,6 +822,7 @@ class SearchView(PickList):
         tags = await self.search(similar=True)
         footer = t("list.similar" if len(tags) > self.count else "list.no_similar")
         view = similar_list(self.owner_id, self.make_title, tags, self.run, footer)
+        view.message, self.widened = self.message, view
         await interaction.edit_original_response(embed=view.embed(), view=view)
 
 
