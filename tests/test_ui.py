@@ -445,7 +445,37 @@ async def test_prefix_search_matches_server_tag_names():
     bot.db.search = AsyncMock(return_value=[])
     missing = prefix_message(".t search nothing")
     await ui.handle_prefix_message(bot, missing)
+    bot.db.search.assert_awaited_with(1, name="nothing", similar=True)
     assert missing.reply.await_args.args[0] == ui.t("error.no_matching_tags")
+    await bot.close()
+
+
+async def test_prefix_search_offers_similar_names():
+    bot = stats_bot(search=AsyncMock(side_effect=[[tag()], [tag(), tag(id=11, name="help")]]))
+    message = prefix_message(".t search hel")
+    await ui.handle_prefix_message(bot, message)
+    view = message.reply.await_args.kwargs["view"]
+    assert isinstance(view, ui.SearchView)
+    assert [item.label for item in view.children] == [ui.t("action.similar")]
+
+    click = interaction()
+    await view.similar.callback(click)
+    bot.db.search.assert_awaited_with(1, name="hel", similar=True)
+    embed = click.response.edit_message.await_args.kwargs["embed"]
+    assert embed.title == "Guild's tags (2)"
+    assert "`help`" in embed.description
+    assert ui.t("list.similar") in embed.footer.text
+    await bot.close()
+
+
+async def test_empty_search_shows_similar_names():
+    bot = stats_bot(search=AsyncMock(side_effect=[[], [tag(name="hello world")]]))
+    message = prefix_message(".t search helo")
+    await ui.handle_prefix_message(bot, message)
+    embed = message.reply.await_args.kwargs["embed"]
+    assert "`hello world`" in embed.description
+    assert ui.t("list.similar") in embed.footer.text
+    assert message.reply.await_args.kwargs["view"] is discord.utils.MISSING
     await bot.close()
 
 

@@ -2,6 +2,7 @@ import io
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from types import SimpleNamespace
 
 import discord
@@ -746,6 +747,9 @@ class ListView(OwnedView):
     def page(self) -> list[str]:
         return self.pages[self.index]
 
+    def attached(self):
+        return self if len(self.pages) > 1 else discord.utils.MISSING
+
     @discord.ui.button(label="<", style=discord.ButtonStyle.secondary)
     async def previous(self, interaction, button):
         self.index -= 1
@@ -757,6 +761,49 @@ class ListView(OwnedView):
         self.index += 1
         self.update()
         await interaction.response.edit_message(embed=self.embed(), view=self)
+
+
+class SearchView(ListView):
+    """A name search's results with a button that widens them to similar names."""
+
+    def __init__(self, owner_id: int, make_title, tags: list, search):
+        super().__init__(owner_id, make_title(len(tags)), [code(tag["name"]) for tag in tags])
+        self.make_title, self.search = make_title, search
+        if len(self.pages) == 1:
+            self.remove_item(self.previous)
+            self.remove_item(self.next)
+
+    def attached(self):
+        return self
+
+    async def on_timeout(self):
+        if self.message:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(label=t("action.similar"), style=discord.ButtonStyle.primary, row=1)
+    async def similar(self, interaction, button):
+        self.stop()
+        view = similar_list(self.owner_id, self.make_title, await self.search(similar=True))
+        await interaction.response.edit_message(
+            embed=view.embed(), view=view if len(view.pages) > 1 else None
+        )
+
+
+def similar_list(owner_id: int, make_title, tags: list) -> ListView:
+    lines = [code(tag["name"]) for tag in tags]
+    return ListView(owner_id, make_title(len(tags)), lines, t("list.similar"))
+
+
+async def search_list(owner_id: int, make_title, search) -> ListView | None:
+    """Run a name search; when it finds nothing, fall back to similar names."""
+    if tags := await search():
+        return SearchView(owner_id, make_title, tags, search)
+    if tags := await search(similar=True):
+        return similar_list(owner_id, make_title, tags)
+    return None
 
 
 class PrunePreview(ListView):
@@ -1153,7 +1200,9 @@ async def prefix_list(bot, message: discord.Message, value: str):
         await prefix_reply(message, t("error.no_tags"))
         return
     title = t("list.user", user=user.display_name, count=f"{len(tags):,}")
-    await prefix_send_list(message, title, tags)
+    await prefix_send_list(
+        message, ListView(message.author.id, title, [code(tag["name"]) for tag in tags])
+    )
 
 
 async def prefix_search(bot, message: discord.Message, value: str):
@@ -1161,22 +1210,19 @@ async def prefix_search(bot, message: discord.Message, value: str):
     if parsed is None or not parsed[0]:
         await prefix_list(bot, message, "")
         return
-    tags = await bot.db.search(message.guild.id, name=parsed[0])
-    if not tags:
+    view = await search_list(
+        message.author.id,
+        lambda count: t("list.server", guild=message.guild.name, count=f"{count:,}"),
+        partial(bot.db.search, message.guild.id, name=parsed[0]),
+    )
+    if view is None:
         await prefix_reply(message, t("error.no_matching_tags"))
         return
-    title = t("list.server", guild=message.guild.name, count=f"{len(tags):,}")
-    await prefix_send_list(message, title, tags)
+    await prefix_send_list(message, view)
 
 
-async def prefix_send_list(message: discord.Message, title: str, tags: list):
-    view = ListView(message.author.id, title, [code(tag["name"]) for tag in tags])
-    sent = await prefix_reply(
-        message,
-        "",
-        embed=view.embed(),
-        view=view if len(view.pages) > 1 else discord.utils.MISSING,
-    )
+async def prefix_send_list(message: discord.Message, view: ListView):
+    sent = await prefix_reply(message, "", embed=view.embed(), view=view.attached())
     view.message = sent
 
 
@@ -1627,15 +1673,18 @@ def register_commands(bot):
         title = t("show.random_title", name=code(tag["name"]))
         await execute(bot, interaction, tag, arguments or "", attachment, title)
 
-    async def send_list(interaction, title: str, tags: list, filtered: bool):
-        if not tags:
+    async def send_list(interaction, make_title, search, name: str | None, filtered: bool):
+        if name:
+            view = await search_list(interaction.user.id, make_title, search)
+        else:
+            tags = await search()
+            lines = [code(tag["name"]) for tag in tags]
+            view = ListView(interaction.user.id, make_title(len(tags)), lines) if tags else None
+        if view is None:
             await reply(interaction, t("error.no_matching_tags" if filtered else "error.no_tags"))
             return
-        view = ListView(interaction.user.id, title, [code(tag["name"]) for tag in tags])
-        await interaction.followup.send(
-            embed=view.embed(),
-            view=view if len(view.pages) > 1 else discord.utils.MISSING,
-            ephemeral=True,
+        view.message = await interaction.followup.send(
+            embed=view.embed(), view=view.attached(), ephemeral=True, wait=True
         )
 
     @list_group.command(name="server", description=t("command.list_server"))
@@ -1651,11 +1700,19 @@ def register_commands(bot):
         user: discord.User | None = None,
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        tags = await bot.db.search(
-            interaction.guild_id, name=name, content=content, owner_id=user and user.id
+        await send_list(
+            interaction,
+            lambda count: t("list.server", guild=interaction.guild.name, count=f"{count:,}"),
+            partial(
+                bot.db.search,
+                interaction.guild_id,
+                name=name,
+                content=content,
+                owner_id=user and user.id,
+            ),
+            name,
+            bool(content or name or user),
         )
-        title = t("list.server", guild=interaction.guild.name, count=f"{len(tags):,}")
-        await send_list(interaction, title, tags, bool(content or name or user))
 
     @list_group.command(name="user", description=t("command.list_user"))
     @app_commands.describe(
@@ -1672,11 +1729,15 @@ def register_commands(bot):
             await reply(interaction, t("error.bot_tags"))
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        tags = await bot.db.search(
-            interaction.guild_id, name=name, content=content, owner_id=user.id
+        await send_list(
+            interaction,
+            lambda count: t("list.user", user=user.display_name, count=f"{count:,}"),
+            partial(
+                bot.db.search, interaction.guild_id, name=name, content=content, owner_id=user.id
+            ),
+            name,
+            bool(content or name),
         )
-        title = t("list.user", user=user.display_name, count=f"{len(tags):,}")
-        await send_list(interaction, title, tags, bool(content or name))
 
     @remove_group.command(name="tag", description=t("command.remove_tag"))
     @app_commands.describe(name=t("option.name"))

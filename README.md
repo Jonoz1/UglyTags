@@ -45,7 +45,7 @@ delete button is left out.
   statistics, and pruning.
 - `.t search name`: list the server's tags whose names contain `name` (case-insensitive),
   matching `/tag list server name:`. Quote names containing spaces. Without a name it
-  behaves like `.t list`.
+  behaves like `.t list`. See below for similar-name results.
 - Editing a `.t` or `.tag` chat command within 15 minutes of sending it
   updates the bot's earlier reply instead of sending a new one, and editing it into
   something that is not a command, or deleting it, removes the reply, like NotSoBot.
@@ -96,6 +96,10 @@ delete button is left out.
   matching tag.
 - `/tag list server [content] [name] [user]` and `/tag list user [user] [content] [name]`:
   list tags. Filters match case-insensitive substrings.
+  With a name filter (here or in `.t search`), the results have an **Include similar
+  names** button that adds tags with similarly spelled names after the substring
+  matches, and a search that finds nothing shows the similar names instead. NotSoBot
+  has neither.
 - `/tag remove tag name`: removes a tag after confirmation, even for its owner.
 - `/tag remove all [content] [name] [user]`: removes matching tags after confirmation,
   with an option to export them first.

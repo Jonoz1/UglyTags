@@ -102,6 +102,22 @@ async def test_aliases_follow_and_cascade(db):
     assert await db.get_tag(1, "short") is not None
 
 
+async def test_search_can_include_similar_names(db):
+    for guild_id, name, owner in (
+        (1, "the helo", 7),
+        (1, "hello world", 7),
+        (1, "hello there", 8),
+        (1, "banana", 7),
+        (2, "hello", 7),
+    ):
+        await db.create_tag(new_id(), guild_id, name, "body", owner)
+    assert [tag["name"] for tag in await db.search(1, name="helo")] == ["the helo"]
+    similar = await db.search(1, name="helo", similar=True)
+    assert [tag["name"] for tag in similar] == ["the helo", "hello there", "hello world"]
+    owned = await db.search(1, name="helo", owner_id=7, similar=True)
+    assert [tag["name"] for tag in owned] == ["the helo", "hello world"]
+
+
 async def test_similar_names_suggests_close_tags_in_the_guild(db):
     for guild_id, name in ((1, "hello"), (1, "Help"), (1, "world"), (2, "hellos")):
         await db.create_tag(new_id(), guild_id, name, "body", 7)
