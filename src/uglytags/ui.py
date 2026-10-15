@@ -952,10 +952,18 @@ async def handle_prefix_message(bot, message: discord.Message) -> bool:
     return True
 
 
+async def unknown_tag(bot, guild_id: int, name: str) -> str:
+    names = await bot.db.similar_names(guild_id, name)
+    if not names:
+        return t("error.unknown_tag")
+    return t("error.unknown_tag_suggest", names=", ".join(map(code, names)))
+
+
 async def prefix_find(bot, message: discord.Message, name: str):
-    tag = await bot.db.get_tag(message.guild.id, clean_name(name))
+    name = clean_name(name)
+    tag = await bot.db.get_tag(message.guild.id, name)
     if tag is None:
-        await prefix_reply(message, t("error.unknown_tag"))
+        await prefix_reply(message, await unknown_tag(bot, message.guild.id, name))
     return tag
 
 
@@ -1337,9 +1345,10 @@ def register_commands(bot):
         return [app_commands.Choice(name=name, value=name) for name in names]
 
     async def find(interaction: discord.Interaction, name: str):
-        tag = await bot.db.get_tag(interaction.guild_id, clean_name(name))
+        name = clean_name(name)
+        tag = await bot.db.get_tag(interaction.guild_id, name)
         if tag is None:
-            await reply(interaction, t("error.unknown_tag"))
+            await reply(interaction, await unknown_tag(bot, interaction.guild_id, name))
         return tag
 
     @bot.tree.command(name="t", description=t("command.show"))

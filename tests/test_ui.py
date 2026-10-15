@@ -1316,6 +1316,7 @@ def test_format_size():
 
 def stats_bot(**methods):
     bot = UglyTags("postgresql://localhost/test")
+    methods.setdefault("similar_names", AsyncMock(return_value=[]))
     bot.db = SimpleNamespace(close=AsyncMock(), **methods)
     return bot
 
@@ -1478,6 +1479,20 @@ async def test_info_previews_privately_without_counting_a_use():
     assert sent["content"] == "crispy strips"
     assert sent["embeds"][0].title == "bacon"
     assert "`a.mp4`" in sent["embeds"][0].fields[0].value
+    await bot.close()
+
+
+async def test_unknown_tag_suggests_similar_names():
+    bot = stats_bot(
+        get_tag=AsyncMock(return_value=None),
+        similar_names=AsyncMock(return_value=["hello", "help"]),
+    )
+    message = prefix_message(".t helo")
+    await ui.handle_prefix_message(bot, message)
+    bot.db.similar_names.assert_awaited_once_with(message.guild.id, "helo")
+    assert message.reply.await_args.args[0] == ui.t(
+        "error.unknown_tag_suggest", names="`hello`, `help`"
+    )
     await bot.close()
 
 

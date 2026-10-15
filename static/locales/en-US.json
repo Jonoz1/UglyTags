@@ -110,6 +110,7 @@
   "error.owner": "Only the person who started this can use these controls.",
   "error.delete_owner": "Only the person who ran this tag or a server administrator can delete it.",
   "error.unknown_tag": "Unknown Tag",
+  "error.unknown_tag_suggest": "Unknown Tag. Did you mean {names}?",
   "error.tag_exists": "Tag already exists in this server!",
   "error.tag_changed": "That tag changed while you were editing it. Please try again.",
   "error.not_owner": "You're not the owner of this tag!",

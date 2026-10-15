@@ -99,6 +99,15 @@ class Database:
         )
         return await cursor.fetchone()
 
+    async def similar_names(self, guild_id: int, name: str, limit: int = 3) -> list[str]:
+        cursor = await self.execute(
+            """SELECT name FROM (
+                    SELECT name, uses, similarity(name, %s) AS score FROM tags WHERE guild_id = %s
+                ) s WHERE score > 0.3 ORDER BY score DESC, uses DESC, lower(name) LIMIT %s""",
+            (name, guild_id, limit),
+        )
+        return [row["name"] for row in await cursor.fetchall()]
+
     async def get_tag_by_id(self, tag_id: int):
         cursor = await self.execute(
             f"SELECT {TAG_COLUMNS} FROM {TAG_FROM} WHERE t.id = %s", (tag_id,)

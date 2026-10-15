@@ -22,6 +22,10 @@ delete button is left out.
 - `.t name [arguments]` and `.tag name [arguments]`: run a tag from chat and reply to
   the command message without pinging its author. Quote names containing spaces. The
   original `.t show`/`.tag show` aliases also work.
+- When a chat or slash command names a tag that does not exist, the reply suggests up
+  to three similarly spelled tag names from the server: "Unknown Tag. Did you mean
+  `hello`?" NotSoBot only says "Unknown Tag". Matching uses PostgreSQL's
+  `pg_trgm` extension, so very short or symbol-only names may get no suggestions.
 - `.t create`, `.t edit`, `.t alias`, `.t rename`, `.t info`, `.t list`, `.t random`,
   and `.t remove`: provide the original bot's core chat management commands. `.t add`,
   `.t delete`, `.t owner`, and `.t raw` remain aliases. Create, edit, and remove always
@@ -285,8 +289,9 @@ server with the `bot` and `applications.commands` scopes. Grant View Channel, Se
 Messages, Embed Links, Attach Files, and Read Message History. Bots in 100 or more
 servers need Discord's approval for privileged intents. Keep the bot token private.
 
-Python 3.11+ and PostgreSQL 18 are supported. Install [uv](https://docs.astral.sh/uv/),
-then run `uv sync --locked`. Set `DISCORD_TOKEN` and `DATABASE_URL` in the process
+Python 3.11+ and PostgreSQL 18 are supported. The bot creates PostgreSQL's bundled
+`pg_trgm` extension on startup, so its database user must own the database or have
+CREATE on both the database and its `public` schema. Install [uv](https://docs.astral.sh/uv/), then run `uv sync --locked`. Set `DISCORD_TOKEN` and `DATABASE_URL` in the process
 environment, or copy `.env.example` to `.env` and use:
 
 ```sh
