@@ -1,3 +1,4 @@
+import asyncio
 import itertools
 import json
 from datetime import UTC, datetime, timedelta
@@ -1406,3 +1407,24 @@ async def test_failed_edit_resends_files_from_the_start():
     file = ui.render.to_discord_file(ui.tagscript.TagFile("data", "a.txt"))
     await ui.render.respond(message, "hi", files=[file])
     assert message.reply.await_args.kwargs["files"][0].fp.read() == b"data"
+
+
+async def test_undo_edited_from_a_replied_command_does_not_wait_on_itself():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None))
+    message = prefix_message(".t first")
+    await ui.handle_prefix_message(bot, message)
+    message.channel.permissions_for = lambda member: discord.Permissions.none()
+    message.guild.me = object()
+    await asyncio.wait_for(ui.handle_prefix_edit(bot, edited(message, ".undo"), None), 2)
+    assert message.reply.await_args.args[0] == ui.t("undo.none")
+    await bot.close()
+
+
+async def test_undo_with_a_huge_number_clamps_instead_of_failing():
+    bot = stats_bot()
+    message = prefix_message(f".undo {'9' * 5000}")
+    message.channel.permissions_for = lambda member: discord.Permissions.none()
+    message.guild.me = object()
+    await ui.handle_prefix_message(bot, message)
+    assert message.reply.await_args.args[0] == ui.t("undo.none")
+    await bot.close()

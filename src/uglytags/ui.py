@@ -739,10 +739,11 @@ async def prefix_undo(message: discord.Message, value: str):
     if not amount.isdecimal():
         await prefix_reply(message, t("prefix.usage", usage=".undo [amount]"))
         return
-    amount = max(1, min(int(amount), MAX_UNDO))
+    amount = max(1, min(int(amount[:9]), MAX_UNDO))
     can_delete = message.channel.permissions_for(message.guild.me).manage_messages
     deleted = failed = 0
-    for command_id in render.REPLIES.latest(message.author.id, message.channel.id, amount):
+    latest = render.REPLIES.latest(message.author.id, message.channel.id, amount + 1)
+    for command_id in [found for found in latest if found != message.id][:amount]:
         async with render.REPLIES.guard(command_id):
             if not await render.REPLIES.discard(command_id):
                 continue
