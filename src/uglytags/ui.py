@@ -462,7 +462,13 @@ async def available_name(bot, guild_id: int, name: str) -> str:
 
 class CreateConflict(OwnedView):
     def __init__(
-        self, bot, owner_id: int, existing: dict | None, suggestion: str, content: str | None
+        self,
+        bot,
+        owner_id: int,
+        existing: dict | None,
+        suggestion: str,
+        content: str | None,
+        attachments=(),
     ):
         super().__init__(owner_id, CONFIRM_TIMEOUT)
         self.bot, self.existing, self.suggestion, self.content = (
@@ -471,6 +477,7 @@ class CreateConflict(OwnedView):
             suggestion,
             content,
         )
+        self.attachments = list(attachments)
         self.create_as.label = t("action.create_as", name=suggestion)[:80]
         if existing is None:
             self.remove_item(self.overwrite)
@@ -481,9 +488,19 @@ class CreateConflict(OwnedView):
                 TagModal(self.bot, interaction.guild_id, self.owner_id, name, expected)
             )
             return
+        if self.is_finished():
+            return
         self.stop()
         await interaction.response.defer()
-        message = await save_tag(self.bot, interaction, name, self.content, [], expected)
+        attachments, self.attachments = self.attachments, []
+        try:
+            uploads = await read_uploads(attachments, self.bot.max_media_bytes)
+        except MediaError as error:
+            await interaction.edit_original_response(
+                content=t(str(error), max_media_mb=self.bot.max_media_mb), view=None
+            )
+            return
+        message = await save_tag(self.bot, interaction, name, self.content, uploads, expected)
         await interaction.edit_original_response(content=message, view=None)
 
     @discord.ui.button(label=t("action.overwrite"), style=discord.ButtonStyle.danger)
@@ -497,14 +514,34 @@ class CreateConflict(OwnedView):
     @discord.ui.button(label=t("action.cancel"), style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction, button):
         self.stop()
+        self.attachments = []
         await interaction.response.edit_message(content=t("create.cancelled"), view=None)
 
     async def on_timeout(self):
+        self.attachments = []
         if self.message:
             try:
                 await self.message.edit(content=t("create.expired"), view=None)
             except discord.HTTPException:
                 pass
+
+
+async def create_conflict(bot, event, tag: dict, name: str, content: str | None, attachments=()):
+    suggestion = await available_name(bot, event.guild_id, name)
+    allowed = can_overwrite(event, tag) and not is_group(tag)
+    view = CreateConflict(
+        bot, event.user.id, tag if allowed else None, suggestion, content, attachments
+    )
+    if is_group(tag):
+        key = "create.conflict_group"
+    elif tag["owner_id"] == event.user.id:
+        key = "create.conflict_own"
+    else:
+        key = "create.conflict_admin" if allowed else "create.conflict_other"
+    text = t(
+        key, name=code(tag["name"]), suggestion=code(suggestion), owner=f"<@{tag['owner_id']}>"
+    )
+    return text, view
 
 
 class ForceRemove(OwnedView):
@@ -780,9 +817,6 @@ async def prefix_create(bot, message: discord.Message, value: str):
     if not 0 < len(name) <= MAX_NAME:
         await prefix_reply(message, t("error.name", limit=MAX_NAME))
         return
-    if await bot.db.get_tag(message.guild.id, name):
-        await prefix_reply(message, t("error.tag_exists"))
-        return
     source = message
     if not content and not message.attachments and message.reference:
         reference = message.reference
@@ -810,13 +844,17 @@ async def prefix_create(bot, message: discord.Message, value: str):
         await prefix_reply(message, t("prefix.usage", usage=".t create <tag> [content]"))
         return
     uploads = await prefix_uploads(bot, message, source.attachments)
-    if uploads is not None:
+    if uploads is None:
+        return
+    tag = await bot.db.get_tag(message.guild.id, name)
+    if tag:
+        text, view = await create_conflict(bot, message_event(message), tag, name, content, uploads)
+    else:
         view = SaveConfirmation(
             bot, message.author.id, message.guild.id, name, content, uploads, None
         )
-        view.message = await prefix_reply(
-            message, t("save.confirm_create", name=code(name)), view=view
-        )
+        text = t("save.confirm_create", name=code(name))
+    view.message = await prefix_reply(message, text, view=view)
 
 
 async def prefix_edit(bot, message: discord.Message, value: str):
@@ -1165,31 +1203,10 @@ def register_commands(bot):
             return
         tag = await bot.db.get_tag(interaction.guild_id, name)
         if tag:
-            suggestion = await available_name(bot, interaction.guild_id, name)
-            allowed = can_overwrite(interaction, tag) and not is_group(tag)
-            view = CreateConflict(
-                bot,
-                interaction.user.id,
-                tag if allowed else None,
-                suggestion,
-                None if content is None else content.strip(),
+            text, view = await create_conflict(
+                bot, interaction, tag, name, None if content is None else content.strip()
             )
-            if is_group(tag):
-                key = "create.conflict_group"
-            elif tag["owner_id"] == interaction.user.id:
-                key = "create.conflict_own"
-            else:
-                key = "create.conflict_admin" if allowed else "create.conflict_other"
-            await interaction.response.send_message(
-                t(
-                    key,
-                    name=code(tag["name"]),
-                    suggestion=code(suggestion),
-                    owner=f"<@{tag['owner_id']}>",
-                ),
-                view=view,
-                ephemeral=True,
-            )
+            await interaction.response.send_message(text, view=view, ephemeral=True)
             view.message = await interaction.original_response()
             return
         if content is None:

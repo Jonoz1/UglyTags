@@ -697,6 +697,41 @@ async def test_create_conflict_without_content_opens_form():
     await bot.close()
 
 
+@pytest.mark.parametrize("command_name", ["add", "create"])
+async def test_prefix_create_on_own_tag_offers_overwrite_or_new_name(command_name):
+    bot = conflict_bot(tag(), taken={"hello1"})
+    attachment = SimpleNamespace(size=4, filename="file.txt", read=AsyncMock(return_value=b"data"))
+    message = prefix_message(f".t {command_name} hello new body", attachments=[attachment])
+    await ui.handle_prefix_message(bot, message)
+    bot.db.create_tag.assert_not_awaited()
+    assert "`hello2`" in message.reply.await_args.args[0]
+    view = message.reply.await_args.kwargs["view"]
+    assert [item.label for item in view.children] == ["Overwrite", "Create as hello2", "Cancel"]
+    assert view.owner_id == 2
+    attachment.read.assert_not_awaited()
+
+    bot.db.get_tag.return_value = None
+    click = button_event()
+    await view.create_as.callback(click)
+    args = bot.db.create_tag.await_args.args
+    assert args[1:] == (1, "hello2", "new body\n{attach:file.txt}", 2, {"file.txt": b"data"})
+    assert "created" in click.edit_original_response.await_args.kwargs["content"]
+    await view.overwrite.callback(button_event())
+    assert bot.db.create_tag.await_count == 1
+    bot.db.save_content.assert_not_awaited()
+    await bot.close()
+
+
+async def test_prefix_create_on_other_users_tag_offers_new_name_only():
+    bot = conflict_bot(tag(owner_id=3))
+    message = prefix_message(".t add hello body")
+    await ui.handle_prefix_message(bot, message)
+    assert "belongs to someone else" in message.reply.await_args.args[0]
+    view = message.reply.await_args.kwargs["view"]
+    assert [item.label for item in view.children] == ["Create as hello1", "Cancel"]
+    await bot.close()
+
+
 @pytest.mark.parametrize("command_name", ["create", "add"])
 async def test_create_without_conflict_requires_confirmation(command_name):
     bot = conflict_bot(None)
