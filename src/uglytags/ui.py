@@ -768,7 +768,7 @@ class SearchView(ListView):
 
     def __init__(self, owner_id: int, make_title, tags: list, search):
         super().__init__(owner_id, make_title(len(tags)), [code(tag["name"]) for tag in tags])
-        self.make_title, self.search = make_title, search
+        self.make_title, self.search, self.count = make_title, search, len(tags)
         if len(self.pages) == 1:
             self.remove_item(self.previous)
             self.remove_item(self.next)
@@ -786,15 +786,18 @@ class SearchView(ListView):
     @discord.ui.button(label=t("action.similar"), style=discord.ButtonStyle.primary, row=1)
     async def similar(self, interaction, button):
         self.stop()
-        view = similar_list(self.owner_id, self.make_title, await self.search(similar=True))
-        await interaction.response.edit_message(
+        await interaction.response.defer()
+        tags = await self.search(similar=True)
+        footer = t("list.similar" if len(tags) > self.count else "list.no_similar")
+        view = similar_list(self.owner_id, self.make_title, tags, footer)
+        await interaction.edit_original_response(
             embed=view.embed(), view=view if len(view.pages) > 1 else None
         )
 
 
-def similar_list(owner_id: int, make_title, tags: list) -> ListView:
+def similar_list(owner_id: int, make_title, tags: list, footer: str) -> ListView:
     lines = [code(tag["name"]) for tag in tags]
-    return ListView(owner_id, make_title(len(tags)), lines, t("list.similar"))
+    return ListView(owner_id, make_title(len(tags)), lines, footer)
 
 
 async def search_list(owner_id: int, make_title, search) -> ListView | None:
@@ -802,7 +805,7 @@ async def search_list(owner_id: int, make_title, search) -> ListView | None:
     if tags := await search():
         return SearchView(owner_id, make_title, tags, search)
     if tags := await search(similar=True):
-        return similar_list(owner_id, make_title, tags)
+        return similar_list(owner_id, make_title, tags, t("list.similar"))
     return None
 
 

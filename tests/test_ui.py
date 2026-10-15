@@ -459,12 +459,45 @@ async def test_prefix_search_offers_similar_names():
     assert [item.label for item in view.children] == [ui.t("action.similar")]
 
     click = interaction()
+    click.edit_original_response = AsyncMock()
     await view.similar.callback(click)
+    click.response.defer.assert_awaited_once()
     bot.db.search.assert_awaited_with(1, name="hel", similar=True)
-    embed = click.response.edit_message.await_args.kwargs["embed"]
+    embed = click.edit_original_response.await_args.kwargs["embed"]
     assert embed.title == "Guild's tags (2)"
     assert "`help`" in embed.description
     assert ui.t("list.similar") in embed.footer.text
+
+    bot.db.search = AsyncMock(side_effect=[[tag()], [tag()]])
+    message = prefix_message(".t search hello")
+    await ui.handle_prefix_message(bot, message)
+    click = interaction()
+    click.edit_original_response = AsyncMock()
+    await message.reply.await_args.kwargs["view"].similar.callback(click)
+    embed = click.edit_original_response.await_args.kwargs["embed"]
+    assert ui.t("list.no_similar") in embed.footer.text
+    await bot.close()
+
+
+async def test_slash_search_and_unknown_tag_suggest_similar_names():
+    bot = stats_bot(
+        search=AsyncMock(side_effect=[[], [tag(name="hello world")]]),
+        get_tag=AsyncMock(return_value=None),
+        similar_names=AsyncMock(return_value=["hello"]),
+    )
+    event = stats_event()
+    await command(bot, "list", "server")(event, name="helo")
+    bot.db.search.assert_awaited_with(1, name="helo", content=None, owner_id=None, similar=True)
+    sent = event.followup.send.await_args.kwargs
+    assert sent["embed"].title == "Server's tags (1)"
+    assert ui.t("list.similar") in sent["embed"].footer.text
+
+    event = stats_event()
+    await bot.tree.get_command("t").callback(event, "helo")
+    bot.db.similar_names.assert_awaited_once_with(1, "helo")
+    assert event.response.send_message.await_args.args[0] == ui.t(
+        "error.unknown_tag_suggest", names="`hello`"
+    )
     await bot.close()
 
 

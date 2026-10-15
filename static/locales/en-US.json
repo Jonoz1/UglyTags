@@ -92,6 +92,7 @@
   "list.user": "{user}'s tags ({count})",
   "list.footer": "Page {page}/{pages}",
   "list.similar": "Includes similar names",
+  "list.no_similar": "No other similar names",
   "remove.force_title": "Force Remove Tag?",
   "remove.confirm_title": "Remove Tag?",
   "remove.cancelled": "Canceled; the tag was not removed.",
