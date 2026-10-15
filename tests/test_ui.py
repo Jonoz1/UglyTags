@@ -63,6 +63,7 @@ def interaction(user_id=2, **permissions):
     )
     return SimpleNamespace(
         id=next(MESSAGE_IDS),
+        created_at=datetime.now(UTC),
         guild_id=1,
         user=user,
         response=response,
@@ -1600,7 +1601,7 @@ def slash_event(channel, user_id=2):
     event.channel, event.channel_id = channel, channel.id
     event.guild = SimpleNamespace(id=1, me=object(), filesize_limit=20_000_000)
     event.filesize_limit = 20_000_000
-    event.edit_original_response = AsyncMock(return_value=SimpleNamespace(id=next(MESSAGE_IDS)))
+    event.edit_original_response = AsyncMock(return_value=AsyncMock(id=next(MESSAGE_IDS)))
     return event
 
 
@@ -1614,7 +1615,8 @@ async def test_slash_tag_responses_are_tracked_and_undone_with_prefix_commands()
     await ui.execute(bot, slash, tag(content="hello"), "", None)
     tracked = ui.render.REPLIES.get(slash.id)
     assert tracked is not None and not tracked.prefixed
-    response = channel.get_partial_message.return_value
+    response = slash.edit_original_response.return_value
+    assert tracked.expires - ui.render.time.monotonic() <= ui.render.REPLY_WINDOW
 
     preview = slash_event(channel)
     await ui.execute(bot, preview, tag(content="hello"), "", None, lead_embed=discord.Embed())
@@ -1647,3 +1649,11 @@ async def test_slash_undo_replies_privately():
     await command(bot, "undo")(again, 1)
     assert again.followup.send.await_args.args[0] == ui.t("undo.none")
     await bot.close()
+
+
+async def test_slash_tracking_ends_when_the_interaction_token_expires():
+    channel = prefix_message(".t a").channel
+    late = slash_event(channel)
+    late.created_at = datetime.now(UTC) - timedelta(minutes=16)
+    ui.render.REPLIES.put_interaction(late, AsyncMock())
+    assert ui.render.REPLIES.get(late.id) is None

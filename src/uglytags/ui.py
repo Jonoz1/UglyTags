@@ -1538,10 +1538,11 @@ def register_commands(bot):
             interaction.guild_id, name=name, content=content, owner_id=user and user.id
         )
         if tag is None:
-            await render.send_error(
+            sent = await render.send_error(
                 interaction,
                 t("error.no_matching_tags" if content or name or user else "error.no_tags"),
             )
+            render.REPLIES.put_interaction(interaction, sent)
             return
         title = t("show.random_title", name=code(tag["name"]))
         await execute(bot, interaction, tag, arguments or "", attachment, title)
@@ -1675,7 +1676,7 @@ def register_commands(bot):
         )
 
     @group.command(name="undo", description=t("command.undo"))
-    @app_commands.describe(amount=t("option.undo_amount"))
+    @app_commands.describe(amount=t("option.undo_amount", max=MAX_UNDO))
     async def undo(
         interaction: discord.Interaction,
         amount: app_commands.Range[int, 1, MAX_UNDO] = 1,

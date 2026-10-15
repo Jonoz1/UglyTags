@@ -651,22 +651,22 @@ class ReplyTracker:
         )
 
     def put_interaction(self, interaction: discord.Interaction, sent: discord.Message) -> None:
-        """Track a public slash command response so undo can remove it."""
+        """Track a public slash command response so undo can remove it.
+
+        It is deleted through the interaction token, which works even where the bot
+        cannot view the channel, so tracking ends when the token expires."""
+        age = (discord.utils.utcnow() - interaction.created_at).total_seconds()
         self.store(
             interaction.id,
             TrackedReply(
-                interaction.channel.get_partial_message(sent.id),
-                None,
-                "",
-                interaction.user.id,
-                interaction.channel_id,
-                prefixed=False,
+                sent, None, "", interaction.user.id, interaction.channel_id, prefixed=False
             ),
+            REPLY_WINDOW - age,
         )
 
-    def store(self, key: int, entry: TrackedReply) -> None:
+    def store(self, key: int, entry: TrackedReply, lifetime: float = REPLY_WINDOW) -> None:
         now = time.monotonic()
-        entry.expires = now + REPLY_WINDOW
+        entry.expires = now + lifetime
         self.entries.pop(key, None)
         self.entries[key] = entry
         for expired in [item for item, value in self.entries.items() if value.expires <= now]:

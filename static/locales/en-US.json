@@ -39,7 +39,7 @@
   "option.alias_target": "Tag to alias from",
   "option.arguments": "Tag's arguments",
   "option.attachment": "Media file",
-  "option.undo_amount": "Up to 5 last commands, default 1",
+  "option.undo_amount": "Up to {max} last commands, default 1",
   "option.content": "Tag's content (leave empty to open a form with multi-line text and files)",
   "option.filter_content": "Match the tag's content",
   "option.filter_name": "Match the tag's name",
