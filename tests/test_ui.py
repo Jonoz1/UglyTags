@@ -659,15 +659,7 @@ def conflict_bot(existing, taken=()):
 
 
 def controls(view):
-    return [
-        item.label if isinstance(item, discord.ui.Button) else [o.value for o in item.options]
-        for item in view.children
-    ]
-
-
-async def pick(view, name, event):
-    view.choose._values = [name]
-    await view.choose.callback(event)
+    return [item.label for item in view.children]
 
 
 def button_event(user_id=2):
@@ -684,8 +676,7 @@ async def test_create_on_own_tag_asks_before_overwriting():
     bot.db.create_tag.assert_not_awaited()
     assert "`Hello3`" in event.response.send_message.await_args.args[0]
     view = event.response.send_message.await_args.kwargs["view"]
-    names = ["Hello3", "Hello4", "Hello5"]
-    assert controls(view) == [names, "Overwrite", "Custom name", "Cancel"]
+    assert controls(view) == ["Overwrite", "Create as Hello3", "Custom name", "Cancel"]
 
     bot.db.get_tag.return_value = tag()
     click = button_event()
@@ -700,10 +691,10 @@ async def test_create_on_other_users_tag_offers_new_name_only():
     event = interaction()
     await command(bot, "create")(event, "hello", "body")
     view = event.response.send_message.await_args.kwargs["view"]
-    assert controls(view)[1:] == ["Custom name", "Cancel"]
+    assert controls(view) == ["Create as hello2", "Custom name", "Cancel"]
     bot.db.get_tag.return_value = None
     click = button_event()
-    await pick(view, "hello2", click)
+    await view.create_as.callback(click)
     args = bot.db.create_tag.await_args.args
     assert (args[1], args[2], args[3], args[4]) == (1, "hello2", "body", 2)
     assert "created" in click.edit_original_response.await_args.kwargs["content"]
@@ -716,7 +707,7 @@ async def test_administrators_can_overwrite_and_edit_others_tags():
     await command(bot, "create")(event, "hello", "admin body")
     assert "<@3>" in event.response.send_message.await_args.args[0]
     view = event.response.send_message.await_args.kwargs["view"]
-    assert controls(view)[1:] == ["Overwrite", "Custom name", "Cancel"]
+    assert controls(view) == ["Overwrite", "Create as hello2", "Custom name", "Cancel"]
     click = button_event()
     click.user.guild_permissions = discord.Permissions(administrator=True)
     await view.overwrite.callback(click)
@@ -738,7 +729,7 @@ async def test_create_conflict_without_content_opens_form():
     event.response.send_modal.assert_not_awaited()
     view = event.response.send_message.await_args.kwargs["view"]
     click = button_event()
-    await pick(view, "hello2", click)
+    await view.create_as.callback(click)
     modal = click.response.send_modal.await_args.args[0]
     assert (modal.name, modal.tag) == ("hello2", None)
     click = button_event()
@@ -757,13 +748,13 @@ async def test_prefix_create_on_own_tag_offers_overwrite_or_new_name(command_nam
     bot.db.create_tag.assert_not_awaited()
     assert "`hello3`" in message.reply.await_args.args[0]
     view = message.reply.await_args.kwargs["view"]
-    assert controls(view)[0][0] == "hello3"
+    assert "Create as hello3" in controls(view)
     assert view.owner_id == 2
     attachment.read.assert_not_awaited()
 
     bot.db.get_tag.return_value = None
     click = button_event()
-    await pick(view, "hello3", click)
+    await view.create_as.callback(click)
     args = bot.db.create_tag.await_args.args
     assert args[1:] == (1, "hello3", "new body\n{attach:file.txt}", 2, {"file.txt": b"data"})
     assert "created" in click.edit_original_response.await_args.kwargs["content"]
@@ -778,14 +769,19 @@ async def test_prefix_create_on_own_tag_offers_overwrite_or_new_name(command_nam
 @pytest.mark.parametrize(
     ("row", "permissions", "text", "labels"),
     [
-        (tag(owner_id=3), {}, "belongs to someone else", ["Custom name", "Cancel"]),
+        (
+            tag(owner_id=3),
+            {},
+            "belongs to someone else",
+            ["Create as hello2", "Custom name", "Cancel"],
+        ),
         (
             tag(owner_id=3),
             {"administrator": True},
             "belongs to <@3>",
-            ["Overwrite", "Custom name", "Cancel"],
+            ["Overwrite", "Create as hello2", "Custom name", "Cancel"],
         ),
-        (tag(is_group=True), {}, "is a tag group", ["Custom name", "Cancel"]),
+        (tag(is_group=True), {}, "is a tag group", ["Create as hello2", "Custom name", "Cancel"]),
     ],
 )
 async def test_prefix_create_conflict_choices(row, permissions, text, labels):
@@ -794,7 +790,7 @@ async def test_prefix_create_conflict_choices(row, permissions, text, labels):
     await ui.handle_prefix_message(bot, message)
     assert text in message.reply.await_args.args[0]
     view = message.reply.await_args.kwargs["view"]
-    assert controls(view)[1:] == labels
+    assert controls(view) == labels
     await bot.close()
 
 
@@ -808,7 +804,7 @@ async def test_prefix_create_conflict_reports_media_error(monkeypatch):
     await ui.handle_prefix_message(bot, message)
     view = message.reply.await_args.kwargs["view"]
     click = button_event()
-    await pick(view, "hello2", click)
+    await view.create_as.callback(click)
     ui.read_uploads.assert_awaited_once_with([attachment], bot.max_media_bytes)
     assert "Each file must be" in click.edit_original_response.await_args.kwargs["content"]
     assert view.attachments == []
@@ -1240,11 +1236,7 @@ async def test_group_rules():
     event = interaction()
     await command(bot, "create")(event, "dogs", "text")
     view = event.response.send_message.await_args.kwargs["view"]
-    assert controls(view) == [
-        ["dogs2", "dogs3", "dogs4"],
-        "Custom name",
-        "Cancel",
-    ]
+    assert controls(view) == ["Create as dogs2", "Custom name", "Cancel"]
     await bot.close()
 
 

@@ -471,18 +471,14 @@ def name_candidates(name: str, count: int = 100) -> list[str]:
     return candidates
 
 
-async def available_names(bot, guild_id: int, name: str, count: int = 3) -> list[str]:
+async def available_name(bot, guild_id: int, name: str) -> str:
     candidates = name_candidates(name)
     taken = await bot.db.taken_names(guild_id, candidates)
-    free = [candidate for candidate in candidates if candidate.lower() not in taken][:count]
-    if not free:
-        suffix = str(new_id())
-        free.append(name[: MAX_NAME - len(suffix)] + suffix)
-    return free
-
-
-async def available_name(bot, guild_id: int, name: str) -> str:
-    return (await available_names(bot, guild_id, name, 1))[0]
+    for candidate in candidates:
+        if candidate.lower() not in taken:
+            return candidate
+    suffix = str(new_id())
+    return name[: MAX_NAME - len(suffix)] + suffix
 
 
 def valid_name(name: str) -> str | None:
@@ -539,16 +535,15 @@ class CreateConflict(OwnedView):
         owner_id: int,
         existing: dict | None,
         name: str,
-        suggestions: list[str],
+        suggestion: str,
         content: str | None,
         attachments=(),
     ):
         super().__init__(owner_id, CONFIRM_TIMEOUT)
         self.bot, self.existing, self.name, self.content = bot, existing, name, content
+        self.suggestion = suggestion
         self.attachments = list(attachments)
-        self.choose.options = [
-            discord.SelectOption(label=suggestion, value=suggestion) for suggestion in suggestions
-        ]
+        self.create_as.label = t("action.create_as", name=suggestion)[:80]
         if existing is None:
             self.remove_item(self.overwrite)
 
@@ -565,19 +560,19 @@ class CreateConflict(OwnedView):
         attachments, self.attachments = self.attachments, []
         await finish_save(self.bot, interaction, name, self.content, attachments, expected)
 
-    @discord.ui.select(placeholder=t("action.pick_name"), row=0)
-    async def choose(self, interaction, select):
-        await self.save(interaction, select.values[0], None)
-
-    @discord.ui.button(label=t("action.overwrite"), style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(label=t("action.overwrite"), style=discord.ButtonStyle.danger)
     async def overwrite(self, interaction, button):
         await self.save(interaction, self.existing["name"], self.existing)
 
-    @discord.ui.button(label=t("action.custom_name"), style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="create", style=discord.ButtonStyle.primary)
+    async def create_as(self, interaction, button):
+        await self.save(interaction, self.suggestion, None)
+
+    @discord.ui.button(label=t("action.custom_name"), style=discord.ButtonStyle.secondary)
     async def custom_name(self, interaction, button):
         await interaction.response.send_modal(RenameModal(self, self.name))
 
-    @discord.ui.button(label=t("action.cancel"), style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=t("action.cancel"), style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction, button):
         self.stop()
         self.attachments = []
@@ -593,10 +588,10 @@ class CreateConflict(OwnedView):
 
 
 async def create_conflict(bot, event, tag: dict, name: str, content: str | None, attachments=()):
-    suggestions = await available_names(bot, event.guild_id, name)
+    suggestion = await available_name(bot, event.guild_id, name)
     allowed = can_overwrite(event, tag) and not is_group(tag)
     view = CreateConflict(
-        bot, event.user.id, tag if allowed else None, name, suggestions, content, attachments
+        bot, event.user.id, tag if allowed else None, name, suggestion, content, attachments
     )
     if is_group(tag):
         key = "create.conflict_group"
@@ -607,7 +602,7 @@ async def create_conflict(bot, event, tag: dict, name: str, content: str | None,
     text = t(
         key,
         name=code(tag["name"]),
-        suggestion=code(suggestions[0]),
+        suggestion=code(suggestion),
         owner=f"<@{tag['owner_id']}>",
     )
     return text, view
