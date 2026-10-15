@@ -26,6 +26,11 @@ delete button is left out.
   to three similarly spelled tag names from the server: "Unknown Tag. Did you mean
   `hello`?" NotSoBot only says "Unknown Tag". Matching uses PostgreSQL's
   `pg_trgm` extension, so very short or symbol-only names may get no suggestions.
+  When showing a tag (`.t`, `.t show`, or `/t`), the suggestion comes with a **Show**
+  button, or a menu when there are several. Picking one shows that tag with the
+  arguments and attachment already given; only the person who ran the command can
+  pick. For `.t` the suggestion reply becomes the tag's output; for `/t` the private
+  suggestion is removed and the output is posted as usual.
 - `.t create`, `.t edit`, `.t alias`, `.t rename`, `.t info`, `.t list`, `.t random`,
   and `.t remove`: provide the original bot's core chat management commands. `.t add`,
   `.t delete`, `.t owner`, and `.t raw` remain aliases. Create, edit, and remove always

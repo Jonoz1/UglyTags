@@ -1002,31 +1002,72 @@ async def handle_prefix_message(bot, message: discord.Message) -> bool:
     return True
 
 
-async def unknown_tag(bot, guild_id: int, name: str) -> str:
+async def unknown_tag(bot, guild_id: int, name: str) -> tuple[str, list[str]]:
     names = await bot.db.similar_names(guild_id, name)
     if not names:
-        return t("error.unknown_tag")
-    return t("error.unknown_tag_suggest", names=", ".join(map(code, names)))
+        return t("error.unknown_tag"), names
+    return t("error.unknown_tag_suggest", names=", ".join(map(code, names))), names
 
 
-async def prefix_find(bot, message: discord.Message, name: str):
+class SuggestionView(OwnedView):
+    """Show one suggested tag with a button, or several with a select menu."""
+
+    def __init__(self, owner_id: int, names: list[str], run):
+        super().__init__(owner_id, CONFIRM_TIMEOUT)
+        self.run = run
+        if len(names) == 1:
+            item = discord.ui.Button(
+                label=t("action.show_tag", name=names[0])[:80], style=discord.ButtonStyle.primary
+            )
+            item.callback = lambda interaction: self.pick(interaction, names[0])
+        else:
+            item = discord.ui.Select(
+                placeholder=t("suggest.placeholder"),
+                options=[discord.SelectOption(label=name, value=name) for name in names],
+            )
+            item.callback = lambda interaction: self.pick(interaction, item.values[0])
+        self.add_item(item)
+
+    async def pick(self, interaction: discord.Interaction, name: str):
+        self.stop()
+        await self.run(interaction, name)
+
+    async def on_timeout(self):
+        if self.message:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass
+
+
+async def prefix_find(bot, message: discord.Message, name: str, run=None):
+    """Find a tag by name, or reply with similar names; `run` makes them pickable."""
     name = clean_name(name)
     tag = await bot.db.get_tag(message.guild.id, name)
     if tag is None:
-        await prefix_reply(message, await unknown_tag(bot, message.guild.id, name))
+        text, names = await unknown_tag(bot, message.guild.id, name)
+        view = SuggestionView(message.author.id, names, run) if run and names else None
+        sent = await prefix_reply(message, text, view=view or discord.utils.MISSING)
+        if view:
+            view.message = sent
     return tag
 
 
 async def prefix_show(bot, message: discord.Message, name: str, arguments: str):
-    tag = await prefix_find(bot, message, name)
+    attachment = message.attachments[0] if message.attachments else None
+
+    async def run(interaction: discord.Interaction, name: str):
+        tag = await bot.db.get_tag(message.guild.id, name)
+        if tag is None:
+            await interaction.response.edit_message(content=t("error.unknown_tag"), view=None)
+            return
+        await interaction.response.defer()
+        # Replaces the suggestion reply, as if the command had named this tag.
+        await execute_message(bot, message, tag, arguments, attachment)
+
+    tag = await prefix_find(bot, message, name, run)
     if tag is not None:
-        await execute_message(
-            bot,
-            message,
-            tag,
-            arguments,
-            message.attachments[0] if message.attachments else None,
-        )
+        await execute_message(bot, message, tag, arguments, attachment)
 
 
 async def prefix_create(bot, message: discord.Message, value: str):
@@ -1393,11 +1434,16 @@ def register_commands(bot):
         names = await bot.db.autocomplete(interaction.guild_id, current, owner_id)
         return [app_commands.Choice(name=name, value=name) for name in names]
 
-    async def find(interaction: discord.Interaction, name: str):
+    async def find(interaction: discord.Interaction, name: str, run=None):
+        """Find a tag by name, or reply with similar names; `run` makes them pickable."""
         name = clean_name(name)
         tag = await bot.db.get_tag(interaction.guild_id, name)
         if tag is None:
-            await reply(interaction, await unknown_tag(bot, interaction.guild_id, name))
+            text, names = await unknown_tag(bot, interaction.guild_id, name)
+            view = SuggestionView(interaction.user.id, names, run) if run and names else None
+            await reply(interaction, text, view=view or discord.utils.MISSING)
+            if view:
+                view.message = await interaction.original_response()
         return tag
 
     @bot.tree.command(name="t", description=t("command.show"))
@@ -1412,7 +1458,19 @@ def register_commands(bot):
         arguments: str | None = None,
         attachment: discord.Attachment | None = None,
     ):
-        tag = await find(interaction, name)
+        async def run(picked: discord.Interaction, name: str):
+            tag = await bot.db.get_tag(picked.guild_id, name)
+            if tag is None:
+                await picked.response.edit_message(content=t("error.unknown_tag"), view=None)
+                return
+            # Post the tag publicly like /t, then drop the private suggestion.
+            await execute(bot, picked, tag, arguments or "", attachment)
+            try:
+                await interaction.delete_original_response()
+            except discord.HTTPException:
+                pass
+
+        tag = await find(interaction, name, run)
         if tag:
             await execute(bot, interaction, tag, arguments or "", attachment)
 

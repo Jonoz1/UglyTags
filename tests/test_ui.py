@@ -187,6 +187,81 @@ async def test_prefix_show_and_original_aliases(monkeypatch):
     await bot.close()
 
 
+async def test_prefix_show_suggestion_button_runs_the_tag(monkeypatch):
+    row = tag()
+    bot = stats_bot(
+        get_tag=AsyncMock(side_effect=[None, row]),
+        similar_names=AsyncMock(return_value=["hello"]),
+    )
+    execute = AsyncMock()
+    monkeypatch.setattr(ui, "execute_message", execute)
+    message = prefix_message(".t helo some args")
+    await ui.handle_prefix_message(bot, message)
+    execute.assert_not_awaited()
+    view = message.reply.await_args.kwargs["view"]
+    [button] = view.children
+    assert button.label == ui.t("action.show_tag", name="hello")
+
+    click = interaction()
+    await button.callback(click)
+    bot.db.get_tag.assert_awaited_with(1, "hello")
+    click.response.defer.assert_awaited_once()
+    execute.assert_awaited_once_with(bot, message, row, "some args", None)
+    await bot.close()
+
+
+async def test_prefix_show_suggestion_menu_lists_every_name(monkeypatch):
+    row = tag(name="help")
+    bot = stats_bot(
+        get_tag=AsyncMock(side_effect=[None, row]),
+        similar_names=AsyncMock(return_value=["hello", "help"]),
+    )
+    execute = AsyncMock()
+    monkeypatch.setattr(ui, "execute_message", execute)
+    message = prefix_message(".t helo")
+    await ui.handle_prefix_message(bot, message)
+    [menu] = message.reply.await_args.kwargs["view"].children
+    assert [option.value for option in menu.options] == ["hello", "help"]
+
+    menu._values = ["help"]
+    other = interaction(user_id=3)
+    assert not await menu.view.interaction_check(other)
+    await menu.callback(interaction())
+    bot.db.get_tag.assert_awaited_with(1, "help")
+    execute.assert_awaited_once_with(bot, message, row, "", None)
+    await bot.close()
+
+
+async def test_slash_show_suggestion_posts_tag_and_removes_suggestion(monkeypatch):
+    row = tag()
+    bot = stats_bot(
+        get_tag=AsyncMock(side_effect=[None, row]),
+        similar_names=AsyncMock(return_value=["hello"]),
+    )
+    execute = AsyncMock()
+    monkeypatch.setattr(ui, "execute", execute)
+    event = interaction()
+    event.delete_original_response = AsyncMock()
+    await bot.tree.get_command("t").callback(event, "helo", "args")
+    view = event.response.send_message.await_args.kwargs["view"]
+    assert event.response.send_message.await_args.kwargs["ephemeral"]
+
+    click = interaction()
+    await view.children[0].callback(click)
+    execute.assert_awaited_once_with(bot, click, row, "args", None)
+    event.delete_original_response.assert_awaited_once()
+    await bot.close()
+
+    # Other commands keep the text-only suggestion.
+    bot = stats_bot(
+        get_tag=AsyncMock(return_value=None), similar_names=AsyncMock(return_value=["hello"])
+    )
+    message = prefix_message(".t info helo")
+    await ui.handle_prefix_message(bot, message)
+    assert message.reply.await_args.kwargs["view"] is discord.utils.MISSING
+    await bot.close()
+
+
 async def test_prefix_create_edit_alias_and_rename(monkeypatch):
     row = tag()
     bot = stats_bot(
