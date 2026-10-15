@@ -36,7 +36,7 @@ REMOVE_ALL_TIMEOUT = 120
 LIST_PAGE_SIZE = 25
 DETAIL_PAGE_SIZE = 10
 MAX_UNDO = 5
-UNDO_NOTICE_SECONDS = 5
+UNDO_NOTICE_SECONDS = 1
 PERIODS = (0, 7, 30, 365)
 SORTS = ("most", "least", "recent", "unused", "newest", "oldest")
 PREFIX_COMMANDS = {
@@ -755,22 +755,23 @@ async def prefix_undo(message: discord.Message, value: str):
             except discord.HTTPException:
                 failed += 1
     if not deleted:
-        await message.reply(
-            t("undo.none"),
-            mention_author=False,
-            allowed_mentions=discord.AllowedMentions.none(),
-            delete_after=UNDO_NOTICE_SECONDS,
-        )
-        return
-    text = t("undo.done", count=deleted)
-    if failed:
-        text = t("undo.failed", text=text, failed=failed)
-    await message.reply(
-        text,
-        mention_author=False,
-        allowed_mentions=discord.AllowedMentions.none(),
-        delete_after=UNDO_NOTICE_SECONDS,
-    )
+        text = t("undo.none")
+    else:
+        text = t("undo.done", count=deleted)
+        if failed:
+            text = t("undo.failed", text=text, failed=failed)
+    options = {
+        "allowed_mentions": discord.AllowedMentions.none(),
+        "delete_after": UNDO_NOTICE_SECONDS,
+    }
+    if can_delete:
+        await message.channel.send(text, **options)
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            log.debug("Could not delete the undo command message")
+    else:
+        await message.reply(text, mention_author=False, **options)
 
 
 async def handle_prefix_message(bot, message: discord.Message) -> bool:

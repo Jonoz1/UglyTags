@@ -45,8 +45,10 @@ delete button is left out.
   edits made after a restart are not matched to their old replies.
 - `.undo [amount]`: deletes the bot's replies to your last `amount` chat commands in
   this channel (1 to 5, default 1; only commands from the last 15 minutes, and only
-  since the last restart). Your own command messages are deleted too when the bot has
-  Manage Messages. Editing an `.undo` message runs it again. Unlike NotSoBot it does not cover slash command responses or older
+  since the last restart). When the bot has Manage Messages it also deletes your
+  command messages and the `.undo` message itself, and a short notice ("Successfully
+  deleted N commands.") disappears after one second; without it the notice replies
+  to `.undo`. Editing an `.undo` message runs it again. Unlike NotSoBot it does not cover slash command responses or older
   commands.
 - **Apps > tag reply**: right-click a message (or long-press on mobile)
   and choose this shortcut (prefixed with a speech-bubble icon). A private form offers your 25 most recently used tags in

@@ -1360,6 +1360,7 @@ async def test_undo_deletes_your_last_replies_and_commands():
     await ui.handle_prefix_message(bot, other)
 
     undo = prefix_message(".undo 2")
+    undo.delete = AsyncMock()
     partial = SimpleNamespace(delete=AsyncMock())
     undo.channel.get_partial_message = MagicMock(return_value=partial)
     undo.channel.permissions_for = lambda member: discord.Permissions(manage_messages=True)
@@ -1371,8 +1372,10 @@ async def test_undo_deletes_your_last_replies_and_commands():
     commands[0].reply.return_value.delete.assert_not_awaited()
     other.reply.return_value.delete.assert_not_awaited()
     assert partial.delete.await_count == 2
-    assert "2 commands" in undo.reply.await_args.args[0]
-    assert undo.reply.await_args.kwargs["delete_after"] == ui.UNDO_NOTICE_SECONDS
+    assert "2 commands" in undo.channel.send.await_args.args[0]
+    assert undo.channel.send.await_args.kwargs["delete_after"] == ui.UNDO_NOTICE_SECONDS
+    undo.delete.assert_awaited_once()
+    undo.reply.assert_not_awaited()
 
     again = prefix_message(".undo")
     again.channel.permissions_for = lambda member: discord.Permissions.none()
