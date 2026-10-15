@@ -531,7 +531,8 @@ async def test_prefix_search_offers_similar_names():
     await ui.handle_prefix_message(bot, message)
     view = message.reply.await_args.kwargs["view"]
     assert isinstance(view, ui.SearchView)
-    assert [item.label for item in view.children] == [ui.t("action.similar")]
+    assert view.similar in view.children
+    assert [option.value for option in view.picker.options] == ["hello"]
 
     click = interaction()
     click.edit_original_response = AsyncMock()
@@ -583,7 +584,44 @@ async def test_empty_search_shows_similar_names():
     embed = message.reply.await_args.kwargs["embed"]
     assert "`hello world`" in embed.description
     assert ui.t("list.similar") in embed.footer.text
-    assert message.reply.await_args.kwargs["view"] is discord.utils.MISSING
+    view = message.reply.await_args.kwargs["view"]
+    assert [item.type for item in view.children] == [discord.ComponentType.select]
+    await bot.close()
+
+
+async def test_picking_a_search_result_shows_the_tag(monkeypatch):
+    rows = [tag(id=index, name=f"t{index:02}") for index in range(30)]
+    bot = stats_bot(search=AsyncMock(return_value=rows), get_tag=AsyncMock(return_value=rows[27]))
+    execute = AsyncMock()
+    monkeypatch.setattr(ui, "execute_message", execute)
+    message = prefix_message(".t search t")
+    await ui.handle_prefix_message(bot, message)
+    view = message.reply.await_args.kwargs["view"]
+    assert len(view.picker.options) == 25
+    await view.next.callback(interaction())
+    assert [option.value for option in view.picker.options] == ["t25", "t26", "t27", "t28", "t29"]
+
+    view.picker._values = ["t27"]
+    click = interaction()
+    await view.picker.callback(click)
+    bot.db.get_tag.assert_awaited_with(1, "t27")
+    click.response.defer.assert_awaited_once()
+    execute.assert_awaited_once_with(bot, message, rows[27], "", None)
+    await bot.close()
+
+
+async def test_picking_a_slash_search_result_posts_the_tag(monkeypatch):
+    row = tag()
+    bot = stats_bot(search=AsyncMock(return_value=[row]), get_tag=AsyncMock(return_value=row))
+    execute = AsyncMock()
+    monkeypatch.setattr(ui, "execute", execute)
+    event = stats_event()
+    await command(bot, "list", "server")(event, name="hel")
+    view = event.followup.send.await_args.kwargs["view"]
+    view.picker._values = ["hello"]
+    click = interaction()
+    await view.picker.callback(click)
+    execute.assert_awaited_once_with(bot, click, row, "", None)
     await bot.close()
 
 

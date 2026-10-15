@@ -747,8 +747,8 @@ class ListView(OwnedView):
     def page(self) -> list[str]:
         return self.pages[self.index]
 
-    def attached(self):
-        return self if len(self.pages) > 1 else discord.utils.MISSING
+    def controls(self):
+        return self if len(self.pages) > 1 else None
 
     @discord.ui.button(label="<", style=discord.ButtonStyle.secondary)
     async def previous(self, interaction, button):
@@ -763,18 +763,32 @@ class ListView(OwnedView):
         await interaction.response.edit_message(embed=self.embed(), view=self)
 
 
-class SearchView(ListView):
-    """A name search's results with a button that widens them to similar names."""
+class PickList(ListView):
+    """Search results with a menu that shows the picked tag through `run`."""
 
-    def __init__(self, owner_id: int, make_title, tags: list, search):
-        super().__init__(owner_id, make_title(len(tags)), [code(tag["name"]) for tag in tags])
-        self.make_title, self.search, self.count = make_title, search, len(tags)
+    def __init__(self, owner_id: int, title: str, tags: list, run, footer: str = ""):
+        self.names, self.run = [tag["name"] for tag in tags], run
+        self.picker = discord.ui.Select(placeholder=t("suggest.placeholder"), row=2)
+        self.picker.callback = self.pick
+        super().__init__(owner_id, title, [code(name) for name in self.names], footer)
+        self.add_item(self.picker)
         if len(self.pages) == 1:
             self.remove_item(self.previous)
             self.remove_item(self.next)
 
-    def attached(self):
+    def update(self):
+        super().update()
+        start = self.index * self.page_size
+        self.picker.options = [
+            discord.SelectOption(label=name, value=name)
+            for name in self.names[start : start + self.page_size]
+        ]
+
+    def controls(self):
         return self
+
+    async def pick(self, interaction: discord.Interaction):
+        await self.run(interaction, self.picker.values[0])
 
     async def on_timeout(self):
         if self.message:
@@ -783,29 +797,34 @@ class SearchView(ListView):
             except discord.HTTPException:
                 pass
 
+
+class SearchView(PickList):
+    """A name search's results with a button that widens them to similar names."""
+
+    def __init__(self, owner_id: int, make_title, tags: list, search, run):
+        super().__init__(owner_id, make_title(len(tags)), tags, run)
+        self.make_title, self.search, self.count = make_title, search, len(tags)
+
     @discord.ui.button(label=t("action.similar"), style=discord.ButtonStyle.primary, row=1)
     async def similar(self, interaction, button):
         self.stop()
         await interaction.response.defer()
         tags = await self.search(similar=True)
         footer = t("list.similar" if len(tags) > self.count else "list.no_similar")
-        view = similar_list(self.owner_id, self.make_title, tags, footer)
-        await interaction.edit_original_response(
-            embed=view.embed(), view=view if len(view.pages) > 1 else None
-        )
+        view = similar_list(self.owner_id, self.make_title, tags, self.run, footer)
+        await interaction.edit_original_response(embed=view.embed(), view=view)
 
 
-def similar_list(owner_id: int, make_title, tags: list, footer: str) -> ListView:
-    lines = [code(tag["name"]) for tag in tags]
-    return ListView(owner_id, make_title(len(tags)), lines, footer)
+def similar_list(owner_id: int, make_title, tags: list, run, footer: str) -> PickList:
+    return PickList(owner_id, make_title(len(tags)), tags, run, footer)
 
 
-async def search_list(owner_id: int, make_title, search) -> ListView | None:
+async def search_list(owner_id: int, make_title, search, run) -> PickList | None:
     """Run a name search; when it finds nothing, fall back to similar names."""
     if tags := await search():
-        return SearchView(owner_id, make_title, tags, search)
+        return SearchView(owner_id, make_title, tags, search, run)
     if tags := await search(similar=True):
-        return similar_list(owner_id, make_title, tags, t("list.similar"))
+        return similar_list(owner_id, make_title, tags, run, t("list.similar"))
     return None
 
 
@@ -1053,19 +1072,26 @@ async def prefix_find(bot, message: discord.Message, name: str, run=None):
     return tag
 
 
-async def prefix_show(bot, message: discord.Message, name: str, arguments: str):
-    attachment = message.attachments[0] if message.attachments else None
+def prefix_runner(bot, message: discord.Message, arguments: str, attachment):
+    """Show a tag picked from a suggestion or search reply in place of that reply."""
 
     async def run(interaction: discord.Interaction, name: str):
         tag = await bot.db.get_tag(message.guild.id, name)
         if tag is None:
-            await interaction.response.edit_message(content=t("error.unknown_tag"), view=None)
+            await interaction.response.edit_message(
+                content=t("error.unknown_tag"), embed=None, view=None
+            )
             return
         await interaction.response.defer()
-        # Replaces the suggestion reply, as if the command had named this tag.
+        # Replaces the reply, as if the command had named this tag.
         await execute_message(bot, message, tag, arguments, attachment)
 
-    tag = await prefix_find(bot, message, name, run)
+    return run
+
+
+async def prefix_show(bot, message: discord.Message, name: str, arguments: str):
+    attachment = message.attachments[0] if message.attachments else None
+    tag = await prefix_find(bot, message, name, prefix_runner(bot, message, arguments, attachment))
     if tag is not None:
         await execute_message(bot, message, tag, arguments, attachment)
 
@@ -1258,6 +1284,7 @@ async def prefix_search(bot, message: discord.Message, value: str):
         message.author.id,
         lambda count: t("list.server", guild=message.guild.name, count=f"{count:,}"),
         partial(bot.db.search, message.guild.id, name=parsed[0]),
+        prefix_runner(bot, message, "", None),
     )
     if view is None:
         await prefix_reply(message, t("error.no_matching_tags"))
@@ -1266,7 +1293,9 @@ async def prefix_search(bot, message: discord.Message, value: str):
 
 
 async def prefix_send_list(message: discord.Message, view: ListView):
-    sent = await prefix_reply(message, "", embed=view.embed(), view=view.attached())
+    sent = await prefix_reply(
+        message, "", embed=view.embed(), view=view.controls() or discord.utils.MISSING
+    )
     view.message = sent
 
 
@@ -1735,8 +1764,15 @@ def register_commands(bot):
         await execute(bot, interaction, tag, arguments or "", attachment, title)
 
     async def send_list(interaction, make_title, search, name: str | None, filtered: bool):
+        async def run(picked: discord.Interaction, name: str):
+            tag = await bot.db.get_tag(picked.guild_id, name)
+            if tag is None:
+                await reply(picked, t("error.unknown_tag"))
+                return
+            await execute(bot, picked, tag, "", None)
+
         if name:
-            view = await search_list(interaction.user.id, make_title, search)
+            view = await search_list(interaction.user.id, make_title, search, run)
         else:
             tags = await search()
             lines = [code(tag["name"]) for tag in tags]
@@ -1745,7 +1781,10 @@ def register_commands(bot):
             await reply(interaction, t("error.no_matching_tags" if filtered else "error.no_tags"))
             return
         view.message = await interaction.followup.send(
-            embed=view.embed(), view=view.attached(), ephemeral=True, wait=True
+            embed=view.embed(),
+            view=view.controls() or discord.utils.MISSING,
+            ephemeral=True,
+            wait=True,
         )
 
     @list_group.command(name="server", description=t("command.list_server"))

@@ -103,8 +103,11 @@ delete button is left out.
   list tags. Filters match case-insensitive substrings.
   With a name filter (here or in `.t search`), the results have an **Include similar
   names** button that adds tags with similarly spelled names after the substring
-  matches, and a search that finds nothing shows the similar names instead. NotSoBot
-  has neither.
+  matches, and a search that finds nothing shows the similar names instead. Name
+  search results also have a menu of the current page's tags: picking one shows it
+  (without arguments). From `.t search` the tag's output replaces the list; from
+  `/tag list` it is posted publicly and the private list stays. NotSoBot has none of
+  these.
 - `/tag remove tag name`: removes a tag after confirmation, even for its owner.
 - `/tag remove all [content] [name] [user]`: removes matching tags after confirmation,
   with an option to export them first.
