@@ -126,6 +126,17 @@ async def test_similar_names_suggests_close_tags_in_the_guild(db):
     assert await db.similar_names(1, "zzzz") == []
 
 
+async def test_variation_names_are_numbered_siblings_in_number_order(db):
+    names = ("Cat10", "cat", "cat2", "cats", "cat2b", "dog2", "cat_3", "100", "200")
+    for name in names:
+        await db.create_tag(new_id(), 1, name, "body", 7)
+    await db.create_tag(new_id(), 2, "cat3", "body", 7)
+    assert await db.variation_names(1, "cat") == ["cat", "cat2", "Cat10"]
+    assert await db.variation_names(1, "CAT10") == ["cat", "cat2", "Cat10"]
+    assert await db.variation_names(1, "dog") == ["dog2"]
+    assert await db.variation_names(1, "100") == []
+
+
 async def test_search_random_autocomplete_and_bulk_delete(db):
     for name, owner in (("apple", 1), ("banana", 2), ("apricot", 1), ("100%_off", 2)):
         await db.create_tag(new_id(), 1, name, f"{name} body", owner)

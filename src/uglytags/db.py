@@ -1,3 +1,4 @@
+import re
 import secrets
 import time
 from datetime import UTC, datetime
@@ -118,6 +119,22 @@ class Database:
             (name, guild_id, limit),
         )
         return [row["name"] for row in await cursor.fetchall()]
+
+    async def variation_names(self, guild_id: int, name: str) -> list[str]:
+        """Names that differ from `name` only by a trailing number, in number order;
+        no number counts as 1."""
+        base = re.sub(r"[0-9]+$", "", name)
+        if not base:
+            return []
+        cursor = await self.execute(
+            """SELECT name FROM tags WHERE guild_id = %s AND starts_with(lower(name), lower(%s))
+                AND substr(lower(name), char_length(lower(%s)) + 1) ~ '^[0-9]*$'""",
+            (guild_id, base, base),
+        )
+        names = [row["name"] for row in await cursor.fetchall()]
+        return sorted(
+            names, key=lambda item: (int(re.search(r"[0-9]*$", item)[0] or 1), item.lower())
+        )
 
     async def get_tag_by_id(self, tag_id: int):
         cursor = await self.execute(

@@ -33,6 +33,21 @@ delete button is left out.
   suggestion is removed and the output is posted as usual. The output starts with
   "Showing `name`" so it is clear which tag was picked. This line, here and below, is
   left off when it would push the output past Discord's length limit.
+- When a shown tag has numbered variations, meaning tags whose names differ only by a
+  trailing number (`cat`, `cat2`, `cat10`; no number counts as 1), its output gets
+  arrow buttons named after the previous and next variation. They replace the output
+  with that variation, with the same arguments, starting with "Showing `name`". Only
+  the person who ran the command can use them, each use counts, and they are removed
+  after 5 minutes. Tags whose output has its own components get no arrows. NotSoBot
+  has no variations.
+- `.t view name [arguments]`: previews a tag privately, which NotSoBot does not offer.
+  A chat command cannot get a private reply, so the bot deletes the command (when it
+  has Manage Messages) and posts a **Preview** button that only the author can press.
+  Pressing it shows the preview privately and deletes the button; unpressed, the button
+  is deleted after 5 minutes. A command with an attachment is deleted together with
+  the button instead, because a deleted message's attachment stops loading. An unknown
+  tag is answered as usual and the command is kept. Previews follow the rules of
+  `/tag info` below.
 - `.t create`, `.t edit`, `.t alias`, `.t rename`, `.t info`, `.t list`, `.t random`,
   and `.t remove`: provide the original bot's core chat management commands. `.t add`,
   `.t delete`, `.t owner`, and `.t raw` remain aliases. Create, edit, and remove always
@@ -95,10 +110,13 @@ delete button is left out.
 - `/tag alias tag name`: creates or repoints an alias that runs another tag.
 - `/tag rename tag name`: renames a tag. Owners can rename their own tags; server
   administrators can rename any tag.
-- `/tag info name [arguments] [attachment]`: privately previews the tag's output
-  together with its raw content, owner, ID, uses, dates, and stored files. A preview
-  does not count as a use and does not save persistent variables; a group previews
-  one of its tags.
+- `/tag info name [arguments] [attachment]`: privately shows the tag's raw content,
+  owner, ID, uses, dates, and stored files, with a **Preview** button that privately
+  shows its output using the given arguments and attachment. `.t info name` posts the
+  same information publicly; anyone can press its Preview button to see the output
+  privately, without arguments. A preview does not count as a use and does not save
+  persistent variables; a group previews one of its tags. The button is removed after
+  5 minutes.
 - `/tag random [arguments] [content] [name] [user] [attachment]`: runs a random
   matching tag. Its output starts with "Showing `name`" (NotSoBot says "Showing tag:").
 - `/tag list server [content] [name] [user]` and `/tag list user [user] [content] [name]`:

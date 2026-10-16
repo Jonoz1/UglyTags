@@ -4,7 +4,7 @@ import itertools
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import discord
 import pytest
@@ -176,12 +176,12 @@ async def test_prefix_show_and_original_aliases(monkeypatch):
 
     message = prefix_message('.t "two words" first second')
     assert await ui.handle_prefix_message(bot, message)
-    execute.assert_awaited_once_with(bot, message, row, "first second", None)
+    execute.assert_awaited_once_with(bot, message, row, "first second", None, cycle=ANY)
 
     execute.reset_mock()
     message = prefix_message(".tag show hello arguments")
     await ui.handle_prefix_message(bot, message)
-    execute.assert_awaited_once_with(bot, message, row, "arguments", None)
+    execute.assert_awaited_once_with(bot, message, row, "arguments", None, cycle=ANY)
 
     assert not await ui.handle_prefix_message(bot, prefix_message("not a command"))
     await bot.close()
@@ -206,7 +206,7 @@ async def test_prefix_show_suggestion_button_runs_the_tag(monkeypatch):
     await button.callback(click)
     bot.db.get_tag.assert_awaited_with(1, "hello")
     click.response.defer.assert_awaited_once()
-    execute.assert_awaited_once_with(bot, message, row, "some args", None, "Showing `hello`")
+    execute.assert_awaited_once_with(bot, message, row, "some args", None, "Showing `hello`", ANY)
     await bot.close()
 
 
@@ -228,7 +228,7 @@ async def test_prefix_show_suggestion_menu_lists_every_name(monkeypatch):
     assert not await menu.view.interaction_check(other)
     await menu.callback(interaction())
     bot.db.get_tag.assert_awaited_with(1, "help")
-    execute.assert_awaited_once_with(bot, message, row, "", None, "Showing `help`")
+    execute.assert_awaited_once_with(bot, message, row, "", None, "Showing `help`", ANY)
     await bot.close()
 
 
@@ -248,7 +248,7 @@ async def test_slash_show_suggestion_posts_tag_and_removes_suggestion(monkeypatc
 
     click = interaction()
     await view.children[0].callback(click)
-    execute.assert_awaited_once_with(bot, click, row, "args", None, "Showing `hello`")
+    execute.assert_awaited_once_with(bot, click, row, "args", None, "Showing `hello`", cycle=ANY)
     event.delete_original_response.assert_awaited_once()
     await bot.close()
 
@@ -604,7 +604,7 @@ async def test_picking_a_search_result_shows_the_tag(monkeypatch):
     await view.picker.callback(click)
     bot.db.get_tag.assert_awaited_with(1, "t27")
     click.response.defer.assert_awaited_once()
-    execute.assert_awaited_once_with(bot, message, rows[27], "", None, "Showing `t27`")
+    execute.assert_awaited_once_with(bot, message, rows[27], "", None, "Showing `t27`", ANY)
 
     # A search for the exact name shows the tag without a title.
     execute.reset_mock()
@@ -613,7 +613,7 @@ async def test_picking_a_search_result_shows_the_tag(monkeypatch):
     view = message.reply.await_args.kwargs["view"]
     view.picker._values = ["t27"]
     await view.picker.callback(interaction())
-    execute.assert_awaited_once_with(bot, message, rows[27], "", None, "")
+    execute.assert_awaited_once_with(bot, message, rows[27], "", None, "", ANY)
     await bot.close()
 
 
@@ -1375,6 +1375,7 @@ def group_bot(tags_by_name, members=None):
         remove_member=AsyncMock(return_value=True),
         group_members=AsyncMock(return_value=members or []),
         random_member=AsyncMock(),
+        variation_names=AsyncMock(return_value=[]),
         use=AsyncMock(),
         close=AsyncMock(),
     )
@@ -1651,27 +1652,99 @@ async def test_stats_commands_render():
     await bot.close()
 
 
-async def test_info_previews_privately_without_counting_a_use():
-    bot = UglyTags("postgresql://localhost/test")
-    shown = tag(name="bacon", content="crispy {args}")
-    bot.db = SimpleNamespace(
-        get_tag=AsyncMock(return_value=shown),
-        file_names=AsyncMock(return_value=["a.mp4"]),
-        use=AsyncMock(),
-        close=AsyncMock(),
-    )
+def preview_event():
     event = interaction()
     event.guild, event.filesize_limit = None, 10_000_000
     event.channel = SimpleNamespace(id=5, get_partial_message=MagicMock())
     event.channel_id = 5
     event.edit_original_response = AsyncMock()
+    return event
+
+
+async def test_info_has_a_button_that_previews_privately_without_counting_a_use():
+    bot = UglyTags("postgresql://localhost/test")
+    shown = tag(name="bacon", content="crispy {args}")
+    bot.db = SimpleNamespace(
+        get_tag=AsyncMock(return_value=shown),
+        get_tag_by_id=AsyncMock(return_value=shown),
+        file_names=AsyncMock(return_value=["a.mp4"]),
+        use=AsyncMock(),
+        close=AsyncMock(),
+    )
+    event = preview_event()
     await command(bot, "info")(event, "bacon", "strips", None)
     assert event.response.defer.await_args.kwargs["ephemeral"]
-    bot.db.use.assert_not_awaited()
     sent = event.edit_original_response.await_args.kwargs
-    assert sent["content"] == "crispy strips"
-    assert sent["embeds"][0].title == "bacon"
-    assert "`a.mp4`" in sent["embeds"][0].fields[0].value
+    assert sent["embed"].title == "bacon"
+    assert "`a.mp4`" in sent["embed"].fields[0].value
+    [button] = sent["view"].children
+    assert button.label == ui.t("action.preview", name="bacon")
+
+    click = preview_event()
+    await button.callback(click)
+    bot.db.get_tag_by_id.assert_awaited_once_with(10)
+    assert click.response.defer.await_args.kwargs["ephemeral"]
+    bot.db.use.assert_not_awaited()
+    assert click.edit_original_response.await_args.kwargs["content"] == "crispy strips"
+    assert ui.render.REPLIES.get(click.id) is None
+    assert not sent["view"].is_finished()
+
+    # The chat command replies publicly with the same button, without arguments.
+    message = prefix_message(".t info bacon")
+    await ui.handle_prefix_message(bot, message)
+    reply = message.reply.await_args.kwargs
+    assert reply["embed"].title == "bacon"
+    assert isinstance(reply["view"], ui.PreviewView)
+    assert reply["view"].arguments == ""
+    await bot.close()
+
+
+async def test_view_command_swaps_itself_for_a_private_preview_button():
+    bot = UglyTags("postgresql://localhost/test")
+    shown = tag(name="bacon", content="crispy {args}")
+    bot.db = SimpleNamespace(
+        get_tag=AsyncMock(return_value=shown),
+        get_tag_by_id=AsyncMock(return_value=shown),
+        use=AsyncMock(),
+        close=AsyncMock(),
+    )
+    message = prefix_message(".t view bacon extra")
+    message.author.mention = "<@2>"
+    message.delete = AsyncMock()
+    await ui.handle_prefix_message(bot, message)
+    message.delete.assert_awaited_once()
+    message.reply.assert_not_awaited()
+    sent = message.channel.send.await_args
+    assert sent.args[0] == ui.t("view.prompt", user="<@2>", name="`bacon`")
+    view = sent.kwargs["view"]
+    [button] = view.children
+
+    assert not await view.interaction_check(interaction(user_id=3))
+    click = preview_event()
+    await button.callback(click)
+    assert click.response.defer.await_args.kwargs["ephemeral"]
+    assert click.edit_original_response.await_args.kwargs["content"] == "crispy extra"
+    bot.db.use.assert_not_awaited()
+    message.channel.send.return_value.delete.assert_awaited_once()
+    assert view.is_finished()
+
+    # An attachment would stop loading, so the command goes with the button instead.
+    message = prefix_message(".t view bacon", attachments=[SimpleNamespace(url="https://a")])
+    message.author.mention = "<@2>"
+    message.delete = AsyncMock()
+    await ui.handle_prefix_message(bot, message)
+    message.delete.assert_not_awaited()
+    await message.channel.send.await_args.kwargs["view"].on_timeout()
+    message.delete.assert_awaited_once()
+
+    # An unknown tag keeps the command and answers it as usual.
+    bot.db.get_tag = AsyncMock(return_value=None)
+    bot.db.similar_names = AsyncMock(return_value=[])
+    message = prefix_message(".t view nope")
+    message.delete = AsyncMock()
+    await ui.handle_prefix_message(bot, message)
+    message.delete.assert_not_awaited()
+    assert message.reply.await_args.args[0] == ui.t("error.unknown_tag")
     await bot.close()
 
 
@@ -1998,6 +2071,74 @@ def slash_event(channel, user_id=2):
     return event
 
 
+def variation_bot():
+    rows = {
+        "cat": tag(id=1, name="cat", content="one"),
+        "cat2": tag(id=2, name="cat2", content="two"),
+    }
+    return stats_bot(
+        get_tag=AsyncMock(side_effect=lambda guild, name: rows.get(name.lower())),
+        variation_names=AsyncMock(return_value=["cat", "cat2"]),
+        use=AsyncMock(),
+    )
+
+
+async def test_arrows_cycle_numbered_variations_in_place():
+    bot = variation_bot()
+    message = prefix_message(".t cat")
+    await ui.handle_prefix_message(bot, message)
+    sent = message.reply.await_args
+    assert sent.args[0] == "one"
+    [_, arrow] = sent.kwargs["view"].children
+    assert arrow.label == ui.t("variation.next", name="cat2")
+
+    await arrow.callback(interaction())
+    edited = message.reply.return_value.edit.await_args.kwargs
+    assert edited["content"] == "Showing `cat2`\n\ntwo"
+    [_, back] = edited["view"].children
+    assert back.label == ui.t("variation.previous", name="cat")
+    assert sent.kwargs["view"].is_finished()
+    message.reply.assert_awaited_once()
+    await bot.close()
+
+
+async def test_a_broken_variation_keeps_its_arrows():
+    bot = variation_bot()
+    bot.db.get_tag = AsyncMock(return_value=tag(id=2, name="cat2", content="{bogus:"))
+    bot.db.random_member = AsyncMock(return_value=None)
+    message = prefix_message(".t cat2")
+    await ui.handle_prefix_message(bot, message)
+    sent = message.reply.await_args
+    [_, back] = sent.kwargs["view"].children
+    assert back.label == ui.t("variation.previous", name="cat")
+
+    bot.db.get_tag = AsyncMock(return_value=tag(id=1, name="cat", is_group=True))
+    await back.callback(interaction())
+    edited = message.reply.return_value.edit.await_args.kwargs
+    assert "no tags" in edited["content"]
+    [_, forward] = edited["view"].children
+    assert forward.label == ui.t("variation.next", name="cat2")
+    await bot.close()
+
+
+async def test_slash_arrows_edit_the_output_and_keep_one_undo_entry():
+    bot = variation_bot()
+    channel = SimpleNamespace(id=5, get_partial_message=MagicMock())
+    event = slash_event(channel)
+    await bot.tree.get_command("t").callback(event, "cat")
+    sent = event.edit_original_response.await_args.kwargs
+    [_, arrow] = sent["view"].children
+
+    click = slash_event(channel)
+    click.message = event.edit_original_response.return_value
+    await arrow.callback(click)
+    assert click.response.defer.await_args.kwargs == {}
+    assert click.edit_original_response.await_args.kwargs["content"] == "Showing `cat2`\n\ntwo"
+    assert ui.render.REPLIES.get(event.id) is None
+    assert ui.render.REPLIES.get(click.id) is not None
+    await bot.close()
+
+
 async def test_slash_tag_responses_are_tracked_and_undone_with_prefix_commands():
     bot = stats_bot(use=AsyncMock())
     command = prefix_message(".t a")
@@ -2012,7 +2153,9 @@ async def test_slash_tag_responses_are_tracked_and_undone_with_prefix_commands()
     assert tracked.expires - ui.render.time.monotonic() <= ui.render.REPLY_WINDOW
 
     preview = slash_event(channel)
-    await ui.execute(bot, preview, tag(content="hello"), "", None, lead_embed=discord.Embed())
+    await ui.execute(bot, preview, tag(content="hello"), "", None, preview=True)
+    assert ui.render.REPLIES.get(preview.id) is None
+    await ui.render.send_error(preview, "broken", preview=True)
     assert ui.render.REPLIES.get(preview.id) is None
 
     undo = prefix_message(".undo 3")

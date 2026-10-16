@@ -267,23 +267,40 @@ async def test_pages_attach_referenced_files():
     assert not await prepared.view.interaction_check(stranger)
 
 
-async def test_lead_embed_joins_plain_output_and_follows_pages():
-    lead = discord.Embed(title="info")
-    event = SimpleNamespace(
-        user=SimpleNamespace(id=7),
-        edit_original_response=AsyncMock(),
-        followup=SimpleNamespace(send=AsyncMock()),
-    )
-    result = await result_of('text{embedjson:{"title":"tag"}}')
-    await render.send_result(event, runtime(), result, lead_embed=lead)
-    embeds = event.edit_original_response.await_args.kwargs["embeds"]
-    assert [embed.title for embed in embeds] == ["info", "tag"]
-    event.followup.send.assert_not_awaited()
+async def test_variation_arrows_show_neighbours_and_only_answer_the_owner():
+    run = AsyncMock()
+    variations = render.Variations(["cat", "cat2", "cat3"], 1, run)
+    prepared = render.prepare(runtime(), await result_of("meow"), variations=variations)
+    assert isinstance(prepared.view, render.VariationView)
+    labels = [item.label for item in prepared.view.children[1:]]
+    assert labels == [
+        render.t("variation.previous", name="cat"),
+        render.t("variation.next", name="cat3"),
+    ]
 
+    def event(user_id):
+        return SimpleNamespace(
+            user=SimpleNamespace(id=user_id),
+            response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+        )
+
+    previous = prepared.view.children[1]
+    stranger = event(9)
+    await previous.callback(stranger)
+    stranger.response.send_message.assert_awaited_once()
+    run.assert_not_awaited()
+    owner = event(7)
+    await previous.callback(owner)
+    owner.response.defer.assert_awaited_once()
+    run.assert_awaited_once_with(owner, "cat")
+
+    first = render.Variations(["cat", "cat2"], 0, run)
     result = await result_of('{pagejson:[{"content":"a"},{"content":"b"}]}')
-    await render.send_result(event, runtime(), result, lead_embed=lead)
-    assert event.edit_original_response.await_args.kwargs["embeds"] == []
-    assert event.followup.send.await_args.kwargs["embed"] is lead
+    prepared = render.prepare(runtime(), result, variations=first)
+    assert isinstance(prepared.view, render.Paginator)
+    row = prepared.view.to_components()[1]["components"]
+    assert row[0]["custom_id"] == TRASH_ID
+    assert [item["label"] for item in row[1:]] == [render.t("variation.next", name="cat2")]
 
 
 @pytest.mark.parametrize(

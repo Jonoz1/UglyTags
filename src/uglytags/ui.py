@@ -58,6 +58,7 @@ PREFIX_COMMANDS = {
     "rename": "rename",
     "search": "search",
     "show": "show",
+    "view": "view",
 }
 
 
@@ -281,22 +282,25 @@ async def execute(
     arguments: str,
     attachment,
     title="",
-    lead_embed=None,
+    preview: bool = False,
     reply_message: discord.Message | None = None,
+    cycle=None,
 ):
-    preview = lead_embed is not None
-    lead = [lead_embed] if preview else []
+    """Run a tag. A preview is private and counts no use; `cycle` shows a numbered
+    variation in place of this output, and its arrows are only added to public output."""
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=preview, thinking=True)
     if not preview:
         await bot.db.use(tag, interaction.guild_id, interaction.user.id)
+    variations = await tag_variations(bot, interaction.guild_id, tag, cycle) if cycle else None
     if is_group(tag):
         tag = await bot.db.random_member(target_id(tag))
         if tag is None:
             await render.send_error(
                 interaction,
                 "\n\n".join(part for part in (title, t("error.group_empty")) if part),
-                lead,
+                preview,
+                variations,
             )
             return
         if not preview:
@@ -315,21 +319,33 @@ async def execute(
         result = await tagscript.parse(rt, tag_content(tag), arguments)
     except tagscript.TagError as error:
         await render.send_error(
-            interaction, "\n\n".join(part for part in (title, str(error)) if part), lead
+            interaction,
+            "\n\n".join(part for part in (title, str(error)) if part),
+            preview,
+            variations,
         )
         return
-    await render.send_result(interaction, rt, result, title, lead_embed, reply_message)
+    await render.send_result(interaction, rt, result, title, preview, reply_message, variations)
 
 
 async def execute_message(
-    bot, message: discord.Message, tag: dict, arguments: str, attachment, title: str = ""
+    bot,
+    message: discord.Message,
+    tag: dict,
+    arguments: str,
+    attachment,
+    title: str = "",
+    cycle=None,
 ):
     await bot.db.use(tag, message.guild.id, message.author.id)
+    variations = await tag_variations(bot, message.guild.id, tag, cycle) if cycle else None
     if is_group(tag):
         tag = await bot.db.random_member(target_id(tag))
         if tag is None:
             await render.send_message_error(
-                message, "\n\n".join(part for part in (title, t("error.group_empty")) if part)
+                message,
+                "\n\n".join(part for part in (title, t("error.group_empty")) if part),
+                variations,
             )
             return
         await bot.db.use(tag, message.guild.id, message.author.id)
@@ -346,10 +362,19 @@ async def execute_message(
         result = await tagscript.parse(rt, tag_content(tag), arguments)
     except tagscript.TagError as error:
         await render.send_message_error(
-            message, "\n\n".join(part for part in (title, str(error)) if part)
+            message, "\n\n".join(part for part in (title, str(error)) if part), variations
         )
         return
-    await render.send_message_result(message, rt, result, title)
+    await render.send_message_result(message, rt, result, title, variations)
+
+
+async def tag_variations(bot, guild_id: int, tag: dict, run) -> render.Variations | None:
+    """Arrow buttons for a tag with numbered siblings, such as `cat`, `cat2`, `cat3`."""
+    names = await bot.db.variation_names(guild_id, tag["name"])
+    lowered = [name.lower() for name in names]
+    if len(names) < 2 or tag["name"].lower() not in lowered:
+        return None
+    return render.Variations(names, lowered.index(tag["name"].lower()), run)
 
 
 def info_embed(
@@ -377,6 +402,71 @@ def info_embed(
         lines.append(t("info.files", files=", ".join(code(name) for name in file_names)))
     embed.add_field(name=t("info.title"), value="\n".join(lines)[:1024])
     return embed
+
+
+class PreviewView(discord.ui.View):
+    """A button that privately previews a tag for whoever presses it."""
+
+    def __init__(self, bot, tag_id: int, name: str, arguments: str = "", attachment=None):
+        super().__init__(timeout=CONFIRM_TIMEOUT)
+        self.bot = bot
+        self.tag_id = tag_id
+        self.arguments = arguments
+        self.attachment = attachment
+        self.message = None
+        self.preview.label = t("action.preview", name=name)[:80]
+
+    @discord.ui.button(style=discord.ButtonStyle.primary)
+    async def preview(self, interaction: discord.Interaction, button):
+        tag = await self.bot.db.get_tag_by_id(self.tag_id)
+        if tag is None or tag["guild_id"] != interaction.guild_id:
+            await reply(interaction, t("error.unknown_tag"))
+        else:
+            await execute(self.bot, interaction, tag, self.arguments, self.attachment, preview=True)
+        await self.previewed()
+
+    async def previewed(self):
+        pass
+
+    async def on_timeout(self):
+        if self.message:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass
+
+    async def on_error(self, interaction, error, item):
+        await report_error(interaction, error)
+
+
+class PreviewPrompt(PreviewView):
+    """The public stand-in for `.t view`: only its owner can press it, and it goes
+    away once pressed or when it expires."""
+
+    def __init__(self, bot, owner_id: int, tag_id: int, name: str, arguments: str, command):
+        attachment = command.attachments[0] if command.attachments else None
+        super().__init__(bot, tag_id, name, arguments, attachment)
+        self.owner_id = owner_id
+        # A deleted message's attachment stops loading, so such a command waits for this.
+        self.command = command if attachment else None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(t("error.owner"), ephemeral=True)
+            return False
+        return True
+
+    async def previewed(self):
+        self.stop()
+        await self.on_timeout()
+
+    async def on_timeout(self):
+        for message in (self.message, self.command):
+            if message:
+                try:
+                    await message.delete()
+                except discord.HTTPException:
+                    pass
 
 
 class OwnedView(discord.ui.View):
@@ -1028,6 +1118,7 @@ async def handle_prefix_message(bot, message: discord.Message) -> bool:
         "remove": prefix_remove,
         "rename": prefix_rename,
         "search": prefix_search,
+        "view": prefix_view,
     }
     await handlers[command](bot, message, first[1])
     return True
@@ -1090,29 +1181,35 @@ def picked_title(tag: dict, typed: str) -> str:
 
 
 def prefix_runner(bot, message: discord.Message, typed: str, arguments: str, attachment):
-    """Show a tag picked from a suggestion or search reply in place of that reply."""
+    """Show a tag picked from a suggestion, search reply, or variation arrow in place
+    of that reply."""
 
     async def run(interaction: discord.Interaction, name: str):
         tag = await bot.db.get_tag(message.guild.id, name)
         if tag is None:
-            await interaction.response.edit_message(
-                content=t("error.unknown_tag"), embed=None, view=None
-            )
+            if interaction.response.is_done():
+                await interaction.followup.send(t("error.unknown_tag"), ephemeral=True)
+            else:
+                await interaction.response.edit_message(
+                    content=t("error.unknown_tag"), embed=None, view=None
+                )
             return
-        await interaction.response.defer()
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         # Replaces the reply, as if the command had named this tag.
-        await execute_message(bot, message, tag, arguments, attachment, picked_title(tag, typed))
+        await execute_message(
+            bot, message, tag, arguments, attachment, picked_title(tag, typed), run
+        )
 
     return run
 
 
 async def prefix_show(bot, message: discord.Message, name: str, arguments: str):
     attachment = message.attachments[0] if message.attachments else None
-    tag = await prefix_find(
-        bot, message, name, prefix_runner(bot, message, name, arguments, attachment)
-    )
+    run = prefix_runner(bot, message, name, arguments, attachment)
+    tag = await prefix_find(bot, message, name, run)
     if tag is not None:
-        await execute_message(bot, message, tag, arguments, attachment)
+        await execute_message(bot, message, tag, arguments, attachment, cycle=run)
 
 
 async def prefix_create(bot, message: discord.Message, value: str):
@@ -1268,7 +1365,32 @@ async def prefix_info(bot, message: discord.Message, value: str):
         return
     names = await bot.db.file_names(tag["reference_id"] or tag["id"])
     members = await bot.db.group_members(tag["id"]) if tag["is_group"] else None
-    await prefix_reply(message, "", embed=info_embed(tag, names, members))
+    view = PreviewView(bot, tag["id"], tag["name"])
+    view.message = await prefix_reply(message, "", embed=info_embed(tag, names, members), view=view)
+
+
+async def prefix_view(bot, message: discord.Message, value: str):
+    """Privately preview a tag: the command is deleted and replaced by a button that
+    only its author can press, since a chat command cannot get a private reply."""
+    parsed = prefix_argument(value)
+    if parsed is None:
+        await prefix_reply(message, t("prefix.usage", usage=".t view <tag> [arguments]"))
+        return
+    tag = await prefix_find(bot, message, parsed[0])
+    if tag is None:
+        return
+    view = PreviewPrompt(bot, message.author.id, tag["id"], tag["name"], parsed[1], message)
+    if view.command is None:
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            log.debug("Could not delete the view command message")
+    # Not a reply: the command message is gone, and deleting it discards tracked replies.
+    view.message = await message.channel.send(
+        t("view.prompt", user=message.author.mention, name=code(tag["name"])),
+        view=view,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 async def prefix_list(bot, message: discord.Message, value: str):
@@ -1512,15 +1634,28 @@ def register_commands(bot):
                 await picked.response.edit_message(content=t("error.unknown_tag"), view=None)
                 return
             # Post the tag publicly like /t, then drop the private suggestion.
-            await execute(bot, picked, tag, arguments or "", attachment, picked_title(tag, name))
+            await execute(
+                bot, picked, tag, arguments or "", attachment, picked_title(tag, name), cycle=cycle
+            )
             try:
                 await interaction.delete_original_response()
             except discord.HTTPException:
                 pass
 
+        async def cycle(picked: discord.Interaction, picked_name: str):
+            tag = await bot.db.get_tag(picked.guild_id, picked_name)
+            if tag is None:
+                await picked.followup.send(t("error.unknown_tag"), ephemeral=True)
+                return
+            # The same message is now tracked for undo under this interaction.
+            render.REPLIES.forget_reply(picked.message.id)
+            await execute(
+                bot, picked, tag, arguments or "", attachment, picked_title(tag, name), cycle=cycle
+            )
+
         tag = await find(interaction, name, run)
         if tag:
-            await execute(bot, interaction, tag, arguments or "", attachment)
+            await execute(bot, interaction, tag, arguments or "", attachment, cycle=cycle)
 
     async def create_tag(interaction: discord.Interaction, name: str, content: str | None = None):
         name = valid_name(name)
@@ -1651,8 +1786,10 @@ def register_commands(bot):
         await interaction.response.defer(ephemeral=True, thinking=True)
         names = await bot.db.file_names(tag["reference_id"] or tag["id"])
         members = await bot.db.group_members(tag["id"]) if tag["is_group"] else None
-        embed = info_embed(tag, names, members)
-        await execute(bot, interaction, tag, arguments or "", attachment, lead_embed=embed)
+        view = PreviewView(bot, tag["id"], tag["name"], arguments or "", attachment)
+        view.message = await interaction.edit_original_response(
+            embed=info_embed(tag, names, members), view=view
+        )
 
     group_group = app_commands.Group(name="group", description=t("command.group"), parent=group)
 

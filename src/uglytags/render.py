@@ -5,7 +5,9 @@ import json
 import logging
 import time
 import weakref
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from functools import partial
 
 import discord
 
@@ -102,6 +104,54 @@ def delete_view(user_id: int) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     view.add_item(DeleteButton(user_id))
     return view
+
+
+@dataclass
+class Variations:
+    """Tags whose names differ only by a trailing number, and how to show one of them."""
+
+    names: list[str]
+    index: int
+    run: Callable[[discord.Interaction, str], Awaitable[None]]
+
+    def buttons(self, owner_id: int, row: int | None = None) -> list[discord.ui.Button]:
+        steps = [(-1, "variation.previous"), (1, "variation.next")]
+        buttons = []
+        for step, key in steps:
+            index = self.index + step
+            if 0 <= index < len(self.names):
+                name = self.names[index]
+                button = discord.ui.Button(
+                    label=t(key, name=name)[:80], style=discord.ButtonStyle.secondary, row=row
+                )
+                button.callback = partial(self.pick, owner_id, button, name)
+                buttons.append(button)
+        return buttons
+
+    async def pick(self, owner_id: int, button, name: str, interaction: discord.Interaction):
+        if interaction.user.id != owner_id:
+            await interaction.response.send_message(t("error.owner"), ephemeral=True)
+            return
+        await interaction.response.defer()
+        # Showing the variation replaces the tracked reply, which stops this view.
+        await self.run(interaction, name)
+
+
+class VariationView(discord.ui.View):
+    def __init__(self, owner_id: int, variations: Variations, editor):
+        super().__init__(timeout=PAGE_TIMEOUT)
+        self.owner_id = owner_id
+        self.editor = editor
+        self.add_item(DeleteButton(owner_id))
+        for button in variations.buttons(owner_id):
+            self.add_item(button)
+
+    async def on_timeout(self):
+        if self.editor:
+            try:
+                await self.editor(view=delete_view(self.owner_id))
+            except discord.HTTPException:
+                log.debug("Could not remove variation buttons")
 
 
 def reply_embed(message: discord.Message) -> discord.Embed:
@@ -448,7 +498,12 @@ def titled(title: str, content: str, limit: int) -> str:
 
 class Paginator(discord.ui.View):
     def __init__(
-        self, result: tagscript.TagResult, owner_id: int, title: str = "", reply_message=None
+        self,
+        result: tagscript.TagResult,
+        owner_id: int,
+        title: str = "",
+        reply_message=None,
+        variations: Variations | None = None,
     ):
         super().__init__(timeout=PAGE_TIMEOUT)
         self.pages = result.pages
@@ -459,6 +514,8 @@ class Paginator(discord.ui.View):
         self.index = 0
         self.editor = None
         self.add_item(DeleteButton(owner_id, 1))
+        for button in variations.buttons(owner_id, 1) if variations else ():
+            self.add_item(button)
         self.update_buttons()
 
     def update_buttons(self):
@@ -527,9 +584,10 @@ def prepare(
     title: str = "",
     editor=None,
     reply_message: discord.Message | None = None,
+    variations: Variations | None = None,
 ):
     if result.pages:
-        paginator = Paginator(result, rt.user.id, title, reply_message)
+        paginator = Paginator(result, rt.user.id, title, reply_message, variations)
         if reply_message and any(len(page.get("embeds") or []) >= 10 for page in result.pages):
             raise tagscript.TagError(t("error.reply_embeds"))
         paginator.editor = editor
@@ -542,6 +600,8 @@ def prepare(
     if has_components:
         session = ComponentSession(rt, result, editor, reply_message)
         prepared.view = session.build(titled(title, content, 4000))
+    elif variations:
+        prepared.view = VariationView(rt.user.id, variations, editor)
     else:
         prepared.view = delete_view(rt.user.id)
     if isinstance(prepared.view, discord.ui.LayoutView):
@@ -558,20 +618,22 @@ async def send_result(
     rt,
     result,
     title: str = "",
-    lead_embed=None,
+    preview: bool = False,
     reply_message: discord.Message | None = None,
+    variations: Variations | None = None,
 ):
-    lead = [lead_embed] if lead_embed else []
     try:
-        prepared = prepare(rt, result, title, interaction.edit_original_response, reply_message)
+        prepared = prepare(
+            rt, result, title, interaction.edit_original_response, reply_message, variations
+        )
     except tagscript.TagError as error:
         await send_error(
-            interaction, "\n\n".join(part for part in (title, str(error)) if part), lead
+            interaction,
+            "\n\n".join(part for part in (title, str(error)) if part),
+            preview,
+            variations,
         )
         return
-    separate_lead = bool(lead) and isinstance(prepared.view, discord.ui.LayoutView | Paginator)
-    if lead and not separate_lead:
-        prepared.embeds = lead + prepared.embeds[:9]
     try:
         kwargs = prepared.edit_kwargs()
         if reply_message is not None:
@@ -590,25 +652,31 @@ async def send_result(
             message = t("error.too_large")
         else:
             message = t("error.send", error=error.text or error.status)
-        await send_error(interaction, message, lead)
+        await send_error(interaction, message, preview, variations)
         return
-    if separate_lead:
-        await interaction.followup.send(embed=lead_embed, ephemeral=True)
-    if lead_embed is None:
+    if not preview:
         REPLIES.put_interaction(interaction, sent, prepared.view)
 
 
-async def send_error(interaction: discord.Interaction, message: str, embeds=()):
-    """Show a tag error. Private previews pass their lead embed; public output passes
-    none and is tracked so undo can remove it."""
+def error_view(user_id: int, variations: Variations | None, editor) -> discord.ui.View:
+    """Keep the variation arrows on an error, so a broken variation is not a dead end."""
+    return VariationView(user_id, variations, editor) if variations else delete_view(user_id)
+
+
+async def send_error(
+    interaction: discord.Interaction,
+    message: str,
+    preview: bool = False,
+    variations: Variations | None = None,
+):
+    """Show a tag error. Public output is tracked so undo can remove it; private
+    previews are not."""
+    view = error_view(interaction.user.id, variations, interaction.edit_original_response)
     sent = await interaction.edit_original_response(
-        content=message[:2000],
-        embeds=list(embeds),
-        attachments=[],
-        view=delete_view(interaction.user.id),
+        content=message[:2000], embeds=[], attachments=[], view=view
     )
-    if not embeds:
-        REPLIES.put_interaction(interaction, sent)
+    if not preview:
+        REPLIES.put_interaction(interaction, sent, view)
 
 
 REPLY_WINDOW = 15 * 60
@@ -777,16 +845,20 @@ async def respond(message: discord.Message, content: str | None = None, **kwargs
     return sent
 
 
-async def send_message_result(message: discord.Message, rt, result, title: str = ""):
+async def send_message_result(
+    message: discord.Message, rt, result, title: str = "", variations: Variations | None = None
+):
     sent = None
 
     async def edit(**kwargs):
         await sent.edit(**kwargs)
 
     try:
-        prepared = prepare(rt, result, title, edit)
+        prepared = prepare(rt, result, title, edit, variations=variations)
     except tagscript.TagError as error:
-        await send_message_error(message, "\n\n".join(part for part in (title, str(error)) if part))
+        await send_message_error(
+            message, "\n\n".join(part for part in (title, str(error)) if part), variations
+        )
         return
     try:
         sent = await respond(message, **prepared.send_kwargs())
@@ -799,8 +871,17 @@ async def send_message_result(message: discord.Message, rt, result, title: str =
             if error.status == 413
             else t("error.send", error=error.text or error.status)
         )
-        await send_message_error(message, error_message)
+        await send_message_error(message, error_message, variations)
 
 
-async def send_message_error(message: discord.Message, content: str):
-    await respond(message, content[:2000], view=delete_view(message.author.id))
+async def send_message_error(
+    message: discord.Message, content: str, variations: Variations | None = None
+):
+    sent = None
+
+    async def edit(**kwargs):
+        await sent.edit(**kwargs)
+
+    sent = await respond(
+        message, content[:2000], view=error_view(message.author.id, variations, edit)
+    )
