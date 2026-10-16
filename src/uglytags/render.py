@@ -438,6 +438,14 @@ def page_files(result: tagscript.TagResult) -> list[list[tagscript.TagFile]]:
     return attached
 
 
+def titled(title: str, content: str, limit: int) -> str:
+    """Put the title above the content, unless it would push the content past the limit."""
+    if not title:
+        return content
+    joined = f"{title}\n\n{content}".strip()
+    return joined if len(joined) <= limit else content
+
+
 class Paginator(discord.ui.View):
     def __init__(
         self, result: tagscript.TagResult, owner_id: int, title: str = "", reply_message=None
@@ -461,7 +469,7 @@ class Paginator(discord.ui.View):
 
     def kwargs(self) -> dict:
         page = self.pages[self.index]
-        content = "\n".join(part for part in (self.title, page.get("content")) if part)
+        content = titled(self.title, page.get("content") or "", 2000)
         prepared = Prepared(
             content[:2000] or None,
             page.get("embeds") or [],
@@ -529,20 +537,18 @@ def prepare(
         prepared = Prepared(kwargs["content"], kwargs["embeds"], paginator.files[0], paginator)
         return prepared
     content = result.text.strip()[:4000].strip()
-    if title:
-        content = f"{title}\n\n{content}"[:4000].strip()
     prepared = Prepared(files=result.files[:10])
     has_components = bool(result.components and result.components["components"])
     if has_components:
         session = ComponentSession(rt, result, editor, reply_message)
-        prepared.view = session.build(content)
+        prepared.view = session.build(titled(title, content, 4000))
     else:
         prepared.view = delete_view(rt.user.id)
     if isinstance(prepared.view, discord.ui.LayoutView):
         return add_reply(prepared, reply_message) if reply_message else prepared
-    prepared.content = content[:2000] or None
+    prepared.content = titled(title, content, 2000)[:2000] or None
     prepared.embeds = result.embeds[:10]
-    if not (content or has_components or result.embeds or result.files):
+    if not (prepared.content or has_components or result.embeds or result.files):
         prepared.content = t("show.empty")
     return add_reply(prepared, reply_message) if reply_message else prepared
 

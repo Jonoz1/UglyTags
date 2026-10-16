@@ -31,7 +31,8 @@ delete button is left out.
   arguments and attachment already given; only the person who ran the command can
   pick. For `.t` the suggestion reply becomes the tag's output; for `/t` the private
   suggestion is removed and the output is posted as usual. The output starts with
-  "Showing `name`" so it is clear which tag was picked.
+  "Showing `name`" so it is clear which tag was picked. This line, here and below, is
+  left off when it would push the output past Discord's length limit.
 - `.t create`, `.t edit`, `.t alias`, `.t rename`, `.t info`, `.t list`, `.t random`,
   and `.t remove`: provide the original bot's core chat management commands. `.t add`,
   `.t delete`, `.t owner`, and `.t raw` remain aliases. Create, edit, and remove always
@@ -70,7 +71,7 @@ delete button is left out.
 - **Apps > tag reply**: right-click a message (or long-press on mobile)
   and choose this shortcut (prefixed with a speech-bubble icon). A private form offers your 25 most recently used tags in
   this server, newest first, with optional arguments and one attachment. Submitting
-  posts the tag publicly, followed by an author mention on a smaller subtext line
+  posts the tag publicly under "Showing `name`", followed by an author mention on a smaller subtext line
   beneath the content and a compact reply card
   with the original author's name, avatar, and linked message excerpt, like CopyCat's
   reply shortcut. Messages are still sent as UglyTags, not as your profile.

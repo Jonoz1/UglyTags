@@ -605,6 +605,15 @@ async def test_picking_a_search_result_shows_the_tag(monkeypatch):
     bot.db.get_tag.assert_awaited_with(1, "t27")
     click.response.defer.assert_awaited_once()
     execute.assert_awaited_once_with(bot, message, rows[27], "", None, "Showing `t27`")
+
+    # A search for the exact name shows the tag without a title.
+    execute.reset_mock()
+    message = prefix_message(".t search T27")
+    await ui.handle_prefix_message(bot, message)
+    view = message.reply.await_args.kwargs["view"]
+    view.picker._values = ["t27"]
+    await view.picker.callback(interaction())
+    execute.assert_awaited_once_with(bot, message, rows[27], "", None, "")
     await bot.close()
 
 
@@ -701,6 +710,7 @@ async def test_tag_reply_rechecks_tag_and_uses_public_execution(monkeypatch):
         bot.db.get_tag_by_id.return_value,
         "some arguments",
         attachment,
+        "Showing `hello`",
         reply_message=target,
     )
     event.response.defer.assert_not_awaited()
@@ -748,7 +758,7 @@ async def test_tag_reply_submission_posts_publicly_and_counts_usage(monkeypatch)
     event.response.defer.assert_awaited_once_with(ephemeral=False, thinking=True)
     bot.db.use.assert_awaited_once_with(row, 1, 2)
     output = event.edit_original_response.await_args.kwargs
-    assert output["content"] == "Tag output\n-# <@4>"
+    assert output["content"] == "Showing `hello`\n\nTag output\n-# <@4>"
     assert "Reply to:" in output["embeds"][-1].description
     assert output["allowed_mentions"].to_dict()["users"] == [4]
     assert output["view"].children[0].user_id == 2

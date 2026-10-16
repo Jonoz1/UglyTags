@@ -231,6 +231,15 @@ async def test_timeout_and_errors_keep_delete_button():
     assert custom_ids(editor.await_args.kwargs["view"].to_components()) == [TRASH_ID]
 
 
+async def test_title_sits_above_output_unless_it_would_cut_it():
+    result = await result_of("hello")
+    assert render.prepare(runtime(), result, "Showing `x`").content == "Showing `x`\n\nhello"
+    result = await result_of('{pagejson:[{"content":"one"},{"content":"two"}]}')
+    assert render.prepare(runtime(), result, "Showing `x`").content == "Showing `x`\n\none"
+    result = await result_of("a" * 1995)
+    assert render.prepare(runtime(), result, "Showing `x`").content == "a" * 1995
+
+
 async def test_pages_attach_referenced_files():
     script = (
         "{attachtext:a}{attachtext:b}"

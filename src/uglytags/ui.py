@@ -206,6 +206,7 @@ class RecentTagModal(discord.ui.Modal):
             tag,
             self.arguments.value,
             self.upload.values[0] if self.upload.values else None,
+            t("show.title", name=code(tag["name"])),
             reply_message=self.message,
         )
 
@@ -1787,7 +1788,7 @@ def register_commands(bot):
             if tag is None:
                 await reply(picked, t("error.unknown_tag"))
                 return
-            await execute(bot, picked, tag, "", None, picked_title(tag, name))
+            await execute(bot, picked, tag, "", None, picked_title(tag, name or ""))
 
         if name:
             view = await search_list(interaction.user.id, make_title, search, run)
