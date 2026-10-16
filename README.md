@@ -30,7 +30,8 @@ delete button is left out.
   button, or a menu when there are several. Picking one shows that tag with the
   arguments and attachment already given; only the person who ran the command can
   pick. For `.t` the suggestion reply becomes the tag's output; for `/t` the private
-  suggestion is removed and the output is posted as usual.
+  suggestion is removed and the output is posted as usual. The output starts with
+  "Showing `name`" so it is clear which tag was picked.
 - `.t create`, `.t edit`, `.t alias`, `.t rename`, `.t info`, `.t list`, `.t random`,
   and `.t remove`: provide the original bot's core chat management commands. `.t add`,
   `.t delete`, `.t owner`, and `.t raw` remain aliases. Create, edit, and remove always
@@ -98,14 +99,15 @@ delete button is left out.
   does not count as a use and does not save persistent variables; a group previews
   one of its tags.
 - `/tag random [arguments] [content] [name] [user] [attachment]`: runs a random
-  matching tag.
+  matching tag. Its output starts with "Showing `name`" (NotSoBot says "Showing tag:").
 - `/tag list server [content] [name] [user]` and `/tag list user [user] [content] [name]`:
   list tags. Filters match case-insensitive substrings.
   With a name filter (here or in `.t search`), the results have an **Include similar
   names** button that adds tags with similarly spelled names after the substring
   matches, and a search that finds nothing shows the similar names instead. Name
   search results also have a menu of the current page's tags: picking one shows it
-  (without arguments). From `.t search` the tag's output replaces the list; from
+  (without arguments), starting with "Showing `name`" unless the search was for that
+  exact name. From `.t search` the tag's output replaces the list; from
   `/tag list` it is posted publicly and the private list stays. NotSoBot has none of
   these.
 - `/tag remove tag name`: removes a tag after confirmation, even for its owner.

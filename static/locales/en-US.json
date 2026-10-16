@@ -80,7 +80,7 @@
   "result.removed": "Removed tag {name}",
   "result.deleted": "✅ Message deleted.",
   "show.empty": "Tag returned no content",
-  "show.random_title": "Showing tag: {name}",
+  "show.title": "Showing {name}",
   "show.component_error": "TagScript error has occurred: {error}",
   "info.title": "Information",
   "info.alias": "Alias of tag {name}",

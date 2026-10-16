@@ -206,7 +206,7 @@ async def test_prefix_show_suggestion_button_runs_the_tag(monkeypatch):
     await button.callback(click)
     bot.db.get_tag.assert_awaited_with(1, "hello")
     click.response.defer.assert_awaited_once()
-    execute.assert_awaited_once_with(bot, message, row, "some args", None)
+    execute.assert_awaited_once_with(bot, message, row, "some args", None, "Showing `hello`")
     await bot.close()
 
 
@@ -228,7 +228,7 @@ async def test_prefix_show_suggestion_menu_lists_every_name(monkeypatch):
     assert not await menu.view.interaction_check(other)
     await menu.callback(interaction())
     bot.db.get_tag.assert_awaited_with(1, "help")
-    execute.assert_awaited_once_with(bot, message, row, "", None)
+    execute.assert_awaited_once_with(bot, message, row, "", None, "Showing `help`")
     await bot.close()
 
 
@@ -248,7 +248,7 @@ async def test_slash_show_suggestion_posts_tag_and_removes_suggestion(monkeypatc
 
     click = interaction()
     await view.children[0].callback(click)
-    execute.assert_awaited_once_with(bot, click, row, "args", None)
+    execute.assert_awaited_once_with(bot, click, row, "args", None, "Showing `hello`")
     event.delete_original_response.assert_awaited_once()
     await bot.close()
 
@@ -488,9 +488,7 @@ async def test_prefix_info_list_random_and_remove(monkeypatch):
 
     random = prefix_message(".t random some arguments")
     await ui.handle_prefix_message(bot, random)
-    execute.assert_awaited_once_with(
-        bot, random, row, "some arguments", None, "Showing tag: `hello`"
-    )
+    execute.assert_awaited_once_with(bot, random, row, "some arguments", None, "Showing `hello`")
 
     remove = prefix_message(".t remove tag hello")
     await ui.handle_prefix_message(bot, remove)
@@ -606,7 +604,7 @@ async def test_picking_a_search_result_shows_the_tag(monkeypatch):
     await view.picker.callback(click)
     bot.db.get_tag.assert_awaited_with(1, "t27")
     click.response.defer.assert_awaited_once()
-    execute.assert_awaited_once_with(bot, message, rows[27], "", None)
+    execute.assert_awaited_once_with(bot, message, rows[27], "", None, "Showing `t27`")
     await bot.close()
 
 
@@ -621,7 +619,16 @@ async def test_picking_a_slash_search_result_posts_the_tag(monkeypatch):
     view.picker._values = ["hello"]
     click = interaction()
     await view.picker.callback(click)
-    execute.assert_awaited_once_with(bot, click, row, "", None)
+    execute.assert_awaited_once_with(bot, click, row, "", None, "Showing `hello`")
+
+    # A search for the exact name shows the tag without a title.
+    execute.reset_mock()
+    event = stats_event()
+    await command(bot, "list", "server")(event, name="Hello")
+    view = event.followup.send.await_args.kwargs["view"]
+    view.picker._values = ["hello"]
+    await view.picker.callback(click)
+    execute.assert_awaited_once_with(bot, click, row, "", None, "")
     await bot.close()
 
 
