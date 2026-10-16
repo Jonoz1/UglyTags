@@ -255,7 +255,10 @@ Supported:
   `lastattachment`, `embedjson`, `pagejson`, `componentjson`, `componentsontimeout`.
 
 `{attach:...}` accepts a stored filename or a Discord attachment, avatar, or emoji
-URL. Expired Discord attachment links are refreshed through Discord's API. The bot
+URL. Expired Discord attachment links are refreshed through Discord's API. Other
+http(s) URLs, such as Tenor or Imgur links, are not downloaded: unlike NotSoBot, which
+fetches them through its media service, the bot posts the link in the message (in
+spoiler bars for the spoiler variants) so Discord embeds it. The bot
 makes no other outbound requests. `{image}` and similar functions use the command's
 attachment option, then an argument (URL, user, or custom emoji), and then the last
 matching media in the channel's 50 most recent messages.

@@ -265,8 +265,15 @@ async def test_stored_and_text_attachments():
     assert result.text == "dog.png"
     with pytest.raises(TagError, match="does not exist"):
         await parse(runtime(db), "{attach:missing.png}")
+    tenor = "https://tenor.com/view/fire-gif-15400153686296022809"
+    content = f"hot{{attach:<{tenor}>|x.gif}}{{attach:{tenor}}}lol"
+    result = await parse(runtime(db, cache={}), content)
+    assert result.text == f"hot\n{tenor}\n{tenor}\nlol"
+    assert result.files == []
+    result = await parse(runtime(db, cache={}), "{attachspoiler:http://example.com/a.png}")
+    assert result.text.strip() == "||http://example.com/a.png||"
     with pytest.raises(TagError, match="Only Discord"):
-        await parse(runtime(db, cache={}), "{attach:https://example.com/a.png}")
+        await parse(runtime(db, cache={}), "{attach:ftp://example.com/a.png}")
 
 
 async def test_embeds_pages_and_components():
