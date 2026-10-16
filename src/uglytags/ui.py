@@ -206,6 +206,7 @@ class RecentTagModal(discord.ui.Modal):
             tag,
             self.arguments.value,
             self.upload.values[0] if self.upload.values else None,
+            t("show.title", name=code(tag["name"])),
             reply_message=self.message,
         )
 
@@ -1083,7 +1084,12 @@ async def prefix_find(bot, message: discord.Message, name: str, run=None):
     return tag
 
 
-def prefix_runner(bot, message: discord.Message, arguments: str, attachment):
+def picked_title(tag: dict, typed: str) -> str:
+    """Name a picked tag above its output when it is not the one the user typed."""
+    return "" if tag["name"].lower() == typed.lower() else t("show.title", name=code(tag["name"]))
+
+
+def prefix_runner(bot, message: discord.Message, typed: str, arguments: str, attachment):
     """Show a tag picked from a suggestion or search reply in place of that reply."""
 
     async def run(interaction: discord.Interaction, name: str):
@@ -1095,14 +1101,16 @@ def prefix_runner(bot, message: discord.Message, arguments: str, attachment):
             return
         await interaction.response.defer()
         # Replaces the reply, as if the command had named this tag.
-        await execute_message(bot, message, tag, arguments, attachment)
+        await execute_message(bot, message, tag, arguments, attachment, picked_title(tag, typed))
 
     return run
 
 
 async def prefix_show(bot, message: discord.Message, name: str, arguments: str):
     attachment = message.attachments[0] if message.attachments else None
-    tag = await prefix_find(bot, message, name, prefix_runner(bot, message, arguments, attachment))
+    tag = await prefix_find(
+        bot, message, name, prefix_runner(bot, message, name, arguments, attachment)
+    )
     if tag is not None:
         await execute_message(bot, message, tag, arguments, attachment)
 
@@ -1295,7 +1303,7 @@ async def prefix_search(bot, message: discord.Message, value: str):
         message.author.id,
         lambda count: t("list.server", guild=message.guild.name, count=f"{count:,}"),
         partial(bot.db.search, message.guild.id, name=parsed[0]),
-        prefix_runner(bot, message, "", None),
+        prefix_runner(bot, message, parsed[0], "", None),
     )
     if view is None:
         await prefix_reply(message, t("error.no_matching_tags"))
@@ -1321,7 +1329,7 @@ async def prefix_random(bot, message: discord.Message, arguments: str):
         tag,
         arguments,
         message.attachments[0] if message.attachments else None,
-        t("show.random_title", name=code(tag["name"])),
+        t("show.title", name=code(tag["name"])),
     )
 
 
@@ -1498,13 +1506,13 @@ def register_commands(bot):
         arguments: str | None = None,
         attachment: discord.Attachment | None = None,
     ):
-        async def run(picked: discord.Interaction, name: str):
-            tag = await bot.db.get_tag(picked.guild_id, name)
+        async def run(picked: discord.Interaction, picked_name: str):
+            tag = await bot.db.get_tag(picked.guild_id, picked_name)
             if tag is None:
                 await picked.response.edit_message(content=t("error.unknown_tag"), view=None)
                 return
             # Post the tag publicly like /t, then drop the private suggestion.
-            await execute(bot, picked, tag, arguments or "", attachment)
+            await execute(bot, picked, tag, arguments or "", attachment, picked_title(tag, name))
             try:
                 await interaction.delete_original_response()
             except discord.HTTPException:
@@ -1771,16 +1779,16 @@ def register_commands(bot):
                 t("error.no_matching_tags" if content or name or user else "error.no_tags"),
             )
             return
-        title = t("show.random_title", name=code(tag["name"]))
+        title = t("show.title", name=code(tag["name"]))
         await execute(bot, interaction, tag, arguments or "", attachment, title)
 
     async def send_list(interaction, make_title, search, name: str | None, filtered: bool):
-        async def run(picked: discord.Interaction, name: str):
-            tag = await bot.db.get_tag(picked.guild_id, name)
+        async def run(picked: discord.Interaction, picked_name: str):
+            tag = await bot.db.get_tag(picked.guild_id, picked_name)
             if tag is None:
                 await reply(picked, t("error.unknown_tag"))
                 return
-            await execute(bot, picked, tag, "", None)
+            await execute(bot, picked, tag, "", None, picked_title(tag, name or ""))
 
         if name:
             view = await search_list(interaction.user.id, make_title, search, run)
