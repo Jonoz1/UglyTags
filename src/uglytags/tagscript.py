@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import discord
 import regex
@@ -705,6 +705,14 @@ def storage_tag_id(rt: Runtime) -> int | None:
     return rt.tag.get("reference_id") or rt.tag["id"]
 
 
+def is_link(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+        return parts.scheme in {"http", "https"} and bool(parts.hostname)
+    except ValueError:
+        return False
+
+
 async def fetch_url(rt: Runtime, tag: TagResult, url: str) -> bytes:
     if not is_discord_url(url):
         raise TagError("Only Discord attachment and avatar URLs can be attached")
@@ -726,11 +734,16 @@ async def fetch_url(rt: Runtime, tag: TagResult, url: str) -> bytes:
 async def attachment(rt, arg, tag, spoiler: bool = False):
     if tag.limits.attachments == 0:
         return False
-    check_attachment_room(tag)
     parts = split(arg, 3)
     url = parts[0].strip().removeprefix("<").removesuffix(">")
     filename = parts[1].strip() if len(parts) > 1 else ""
     description = parts[2] if len(parts) > 2 else None
+    if is_link(url) and not is_discord_url(url):
+        # Other hosts are never fetched; post the link on its own line so Discord embeds it.
+        link = f"||{url}||" if spoiler else url
+        tag.text += ("\n" if tag.text and not tag.text[-1].isspace() else "") + link + "\n"
+        return True
+    check_attachment_room(tag)
     if not url:
         return False
     if "://" in url:
