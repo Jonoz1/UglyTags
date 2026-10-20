@@ -11,6 +11,9 @@ from uglytags.i18n import t
 from uglytags.media import (
     BYTES_PER_MB,
     DEFAULT_MAX_MEDIA_MB,
+    contains_link,
+    link_status,
+    parse_dead_link_days,
     parse_media_limit_mb,
     parse_positive_int,
 )
@@ -44,6 +47,7 @@ class UglyTags(discord.Client):
         test_guild_id: int | None = None,
         max_media_mb: int = DEFAULT_MAX_MEDIA_MB,
         import_limits: ImportLimits | None = None,
+        dead_link_days: int | None = None,
     ):
         intents = discord.Intents.none()
         intents.guilds = True
@@ -58,6 +62,7 @@ class UglyTags(discord.Client):
         self.max_media_mb = max_media_mb
         self.max_media_bytes = max_media_mb * BYTES_PER_MB
         self.import_limits = import_limits or ImportLimits()
+        self.dead_link_days = dead_link_days
         self.session: aiohttp.ClientSession | None = None
         register_commands(self)
 
@@ -72,6 +77,10 @@ class UglyTags(discord.Client):
         else:
             await self.tree.sync()
         self.cleanup.start()
+        if self.dead_link_days:
+            self.check_dead_links.start()
+        else:
+            log.info("DEAD_LINK_DAYS is not set; tags with dead attachment links are kept")
 
     async def on_ready(self):
         log.info("UglyTags connected to %s servers", len(self.guilds))
@@ -109,8 +118,43 @@ class UglyTags(discord.Client):
         except Exception:
             log.exception("Use log cleanup failed; will try again next hour")
 
+    @tasks.loop(hours=24)
+    async def check_dead_links(self):
+        try:
+            deleted = await self.sweep_dead_links()
+            if deleted:
+                log.info("Deleted %s tags whose attachment links stayed dead", deleted)
+        except Exception:
+            log.exception("Dead link check failed; will try again tomorrow")
+
+    async def sweep_dead_links(self) -> int:
+        deleted = set()
+        for row in await self.db.dead_links(self.dead_link_days):
+            if row["tag_id"] in deleted:
+                continue
+            if not contains_link(row["content"], row["url"]):
+                await self.db.drop_dead_link(row["tag_id"], row["url"])
+                continue
+            try:
+                status = await link_status(self.http, self.session, row["url"])
+            except (aiohttp.ClientError, discord.HTTPException, TimeoutError):
+                continue
+            if status != 404:
+                await self.db.drop_dead_link(row["tag_id"], row["url"])
+            elif row["expired"]:
+                await self.db.delete_matching(row["guild_id"], [row["tag_id"]])
+                deleted.add(row["tag_id"])
+                log.info(
+                    "Deleted tag %s in server %s: an attachment link returned 404 for %s days",
+                    row["tag_id"],
+                    row["guild_id"],
+                    self.dead_link_days,
+                )
+        return len(deleted)
+
     async def close(self):
         self.cleanup.cancel()
+        self.check_dead_links.cancel()
         if self.session:
             await self.session.close()
         await self.db.close()
@@ -129,6 +173,7 @@ def main():
     try:
         max_media_mb = parse_media_limit_mb(os.environ.get("MAX_MEDIA_MB"))
         import_limits = parse_import_limits(os.environ)
+        dead_link_days = parse_dead_link_days(os.environ.get("DEAD_LINK_DAYS"))
     except ValueError as error:
         raise SystemExit(str(error)) from error
     bot = UglyTags(
@@ -136,6 +181,7 @@ def main():
         int(test_guild_id) if test_guild_id else None,
         max_media_mb,
         import_limits,
+        dead_link_days,
     )
     bot.run(token, log_handler=None)
 

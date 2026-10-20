@@ -3,8 +3,11 @@ import pytest
 from uglytags.media import (
     MediaError,
     attachment_expired,
+    contains_link,
     download,
     is_discord_url,
+    link_status,
+    parse_dead_link_days,
     parse_media_limit_mb,
     referenced_files,
     safe_filename,
@@ -49,3 +52,26 @@ def test_discord_url_rules():
 async def test_download_refuses_other_hosts():
     with pytest.raises(MediaError):
         await download(None, "https://example.com/a.png", 10)
+
+
+def test_dead_link_days_setting():
+    assert parse_dead_link_days(None) is None
+    assert parse_dead_link_days("") is None
+    assert parse_dead_link_days("  ") is None
+    assert parse_dead_link_days("7") == 7
+    for value in ("0", "-1", "x"):
+        with pytest.raises(ValueError, match="DEAD_LINK_DAYS"):
+            parse_dead_link_days(value)
+
+
+async def test_link_status_skips_other_hosts():
+    assert await link_status(None, None, "https://example.com/a.png") is None
+
+
+def test_contains_link_needs_the_whole_link():
+    url = "https://cdn.discordapp.com/attachments/1/2/a.png"
+    assert contains_link(f"{{attach:{url}}}", url)
+    assert contains_link(f"{{attach:<{url}>|b.png}}", url)
+    assert contains_link(f"see {url}", url)
+    assert not contains_link(f"{{attach:{url}}}", url[:-1])
+    assert not contains_link(f"{{attach:{url}?ex=1}}", url)

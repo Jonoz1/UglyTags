@@ -213,6 +213,13 @@ or scanned. When a tag is saved, stored files it no longer references literally 
 deleted. Output is checked against the upload limit Discord reports with each command,
 and Discord rejects messages whose files exceed it.
 
+When a tag runs and a Discord attachment link written in its content returns 404, the
+bot remembers that link and rechecks it once a day. If the link still returns 404
+`DEAD_LINK_DAYS` days after the first failure, the tag and its aliases are deleted. Any
+other result clears the record, and so does removing the link from the tag. Links that
+come from arguments or other runtime values never count. Leave `DEAD_LINK_DAYS` empty
+to turn this off.
+
 ## TagScript
 
 TagScript is NotSoBot's `{function:argument|argument}` language. This bot ports

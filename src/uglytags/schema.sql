@@ -72,3 +72,11 @@ CREATE INDEX IF NOT EXISTS tag_uses_used_at ON tag_uses (used_at);
 
 -- Migration 4: trigram similarity for "did you mean" suggestions on unknown tag names.
 CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+
+-- Migration 5: attachment links that returned 404 when a tag ran, rechecked daily.
+CREATE TABLE IF NOT EXISTS dead_links (
+    tag_id BIGINT NOT NULL REFERENCES tags ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    first_failed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tag_id, url)
+);

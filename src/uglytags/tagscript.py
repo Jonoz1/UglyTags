@@ -21,6 +21,7 @@ from uglytags.mathexpr import MathError, evaluate
 from uglytags.media import (
     MediaError,
     attachment_expired,
+    contains_link,
     download,
     filename_from_url,
     is_discord_url,
@@ -724,10 +725,20 @@ async def fetch_url(rt: Runtime, tag: TagResult, url: str) -> bytes:
                 rt.client.session, refreshed.get(url, url), rt.max_file_size
             )
         except MediaError as error:
+            if error.status == 404:
+                await record_dead_link(rt, url)
             raise TagError(str(error)) from error
         except (discord.HTTPException, OSError, TimeoutError) as error:
             raise TagError("Attachment could not be downloaded") from error
     return rt.cache[url]
+
+
+async def record_dead_link(rt: Runtime, url: str):
+    # Only links written in the saved tag count; a user-supplied argument never marks a tag.
+    if rt.preview or not rt.tag:
+        return
+    if contains_link(rt.tag.get("reference_content") or rt.tag["content"], url):
+        await rt.db.record_dead_link(storage_tag_id(rt), url)
 
 
 @function("attachment", "attach", "file")
