@@ -1212,6 +1212,19 @@ async def prefix_show(bot, message: discord.Message, name: str, arguments: str):
         await execute_message(bot, message, tag, arguments, attachment, cycle=run)
 
 
+def component_media(components):
+    """Yield media URLs from a Components V2 message, such as NotSoBot image results."""
+    for component in components:
+        if isinstance(component, discord.MediaGalleryComponent):
+            yield from (item.media.url for item in component.items)
+        elif isinstance(component, (discord.ThumbnailComponent, discord.FileComponent)):
+            yield component.media.url
+        elif isinstance(component, discord.SectionComponent):
+            yield from component_media([component.accessory])
+        elif isinstance(component, discord.Container):
+            yield from component_media(component.children)
+
+
 async def prefix_create(bot, message: discord.Message, value: str):
     parsed = prefix_argument(value)
     if parsed is None:
@@ -1244,6 +1257,11 @@ async def prefix_create(bot, message: discord.Message, value: str):
                 if embed.type == "rich"
                 for media in (embed.image, embed.thumbnail, embed.video)
                 if media.url and media.url not in text
+            ]
+            urls += [
+                url
+                for url in component_media(source.components)
+                if not url.startswith("attachment://") and url not in text
             ]
             parts = [text, *dict.fromkeys(urls)]
             content = "\n".join(part for part in parts if part)

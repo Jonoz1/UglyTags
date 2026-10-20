@@ -98,6 +98,7 @@ def prefix_message(content, user_id=2, attachments=None, **permissions):
         ),
         attachments=attachments or [],
         embeds=[],
+        components=[],
         message_snapshots=[],
         reference=None,
         reply=AsyncMock(return_value=AsyncMock()),
@@ -373,6 +374,31 @@ async def test_prefix_create_from_reply_text_and_embed_media():
     view = message.reply.await_args.kwargs["view"]
     await view.confirm.callback(button_event())
     assert bot.db.create_tag.await_args.args[3] == f"{text}\nhttps://example.com/thumb.png"
+    await bot.close()
+
+
+async def test_prefix_create_from_reply_components_v2_media():
+    bot = stats_bot(get_tag=AsyncMock(return_value=None), create_tag=AsyncMock())
+    url = "https://cdn.notsobot.com/image.png"
+    payload = {
+        "type": 17,
+        "components": [
+            {
+                "type": 12,
+                "items": [{"media": {"url": url}}, {"media": {"url": "attachment://a.png"}}],
+            },
+            {"type": 14},
+            {"type": 10, "content": "-# **Invoked by <@2>**"},
+        ],
+    }
+    target = prefix_message("")
+    target.components = [discord.components._component_factory(payload)]
+    message = prefix_message(".t add hello")
+    message.reference = SimpleNamespace(resolved=target, type=discord.MessageReferenceType.default)
+    await ui.handle_prefix_message(bot, message)
+    view = message.reply.await_args.kwargs["view"]
+    await view.confirm.callback(button_event())
+    assert bot.db.create_tag.await_args.args[3] == url
     await bot.close()
 
 
