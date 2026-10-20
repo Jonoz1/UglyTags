@@ -53,8 +53,8 @@ delete button is left out.
   `.t delete`, `.t owner`, and `.t raw` remain aliases. Create, edit, and remove always
   ask for confirmation. Create and edit store files attached to the command message.
   Reply with `.t add name` or `.t create name` (without content or command attachments)
-  to create a tag from the replied message's text, attachments, and bot embed media
-  links (for a forward, the original message's).
+  to create a tag from the replied message's text, attachments, and bot embed or
+  component media links (for a forward, the original message's).
   Unlike NotSoBot, which keeps only the first link, the full text is copied, unless the
   message has attachments, in which case its text is treated as a caption and skipped.
   Attachments are stored with the tag; links remain links rather than being downloaded
