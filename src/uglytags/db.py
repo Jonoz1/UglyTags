@@ -206,6 +206,32 @@ class Database:
     async def delete(self, tag_id: int):
         await self.execute("DELETE FROM tags WHERE id = %s", (tag_id,))
 
+    async def alias_names(self, guild_id: int, tag_id: int) -> list[str]:
+        rows = await self.fetchall(
+            """SELECT name FROM tags WHERE guild_id = %s AND reference_id = %s
+               ORDER BY lower(name)""",
+            (guild_id, tag_id),
+        )
+        return [row["name"] for row in rows]
+
+    async def record_dead_link(self, tag_id: int, url: str):
+        await self.execute(
+            "INSERT INTO dead_links (tag_id, url) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (tag_id, url),
+        )
+
+    async def drop_dead_link(self, tag_id: int, url: str):
+        await self.execute("DELETE FROM dead_links WHERE tag_id = %s AND url = %s", (tag_id, url))
+
+    async def dead_links(self, days: int) -> list[dict]:
+        return await self.fetchall(
+            """SELECT d.tag_id, d.url, t.guild_id, t.content,
+                   d.first_failed_at <= now() - make_interval(days => %s) AS expired
+               FROM dead_links d JOIN tags t ON t.id = d.tag_id
+               ORDER BY d.first_failed_at""",
+            (days,),
+        )
+
     async def search(self, guild_id: int, *, name=None, content=None, owner_id=None, similar=False):
         where, params = filters(guild_id, name, content, owner_id, similar)
         order = "lower(t.name)"

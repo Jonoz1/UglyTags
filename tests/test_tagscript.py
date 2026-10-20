@@ -7,6 +7,7 @@ import pytest
 
 from uglytags import tagscript
 from uglytags.db import StorageLimitError
+from uglytags.media import MediaError
 from uglytags.tagscript import Runtime, TagError, parse, split, string_arguments
 
 
@@ -274,6 +275,69 @@ async def test_stored_and_text_attachments():
     assert result.text.strip() == "||http://example.com/a.png||"
     with pytest.raises(TagError, match="Only Discord"):
         await parse(runtime(db, cache={}), "{attach:ftp://example.com/a.png}")
+
+
+DEAD_URL = "https://cdn.discordapp.com/attachments/1/2/a.png?ex=ffffffff&is=1&hm=ab"
+
+
+def dead_link_runtime(db, tag, **kwargs):
+    rt = runtime(db, tag=tag, cache={}, **kwargs)
+    rt.client.session = None
+    rt.client.http = None
+    return rt
+
+
+async def test_missing_attachment_records_dead_link_for_saved_tag(monkeypatch):
+    error = MediaError("Attachment download failed with status 404", 404)
+    monkeypatch.setattr(tagscript, "download", AsyncMock(side_effect=error))
+    db = FakeDB()
+    db.record_dead_link = AsyncMock()
+    tag = make_tag(content=f"{{attach:{DEAD_URL}}}")
+    with pytest.raises(TagError, match="status 404"):
+        await parse(dead_link_runtime(db, tag), f"{{attach:{DEAD_URL}}}")
+    db.record_dead_link.assert_awaited_once_with(tag["id"], DEAD_URL)
+
+
+async def test_dead_link_is_not_recorded_when_it_does_not_count(monkeypatch):
+    db = FakeDB()
+    db.record_dead_link = AsyncMock()
+    monkeypatch.setattr(
+        tagscript,
+        "download",
+        AsyncMock(side_effect=MediaError("Attachment download failed with status 404", 404)),
+    )
+    tag = make_tag(content=f"{{attach:{DEAD_URL}}}")
+    with pytest.raises(TagError, match="status 404"):
+        await parse(dead_link_runtime(db, tag, preview=True), f"{{attach:{DEAD_URL}}}")
+    db.record_dead_link.assert_not_awaited()
+
+    # A URL supplied through {args} is not written in the saved tag.
+    tag = make_tag(content="{attach:{args}}")
+    with pytest.raises(TagError, match="status 404"):
+        await parse(dead_link_runtime(db, tag), "{attach:{args}}", DEAD_URL)
+    db.record_dead_link.assert_not_awaited()
+
+    monkeypatch.setattr(
+        tagscript,
+        "download",
+        AsyncMock(side_effect=MediaError("Attachment download failed with status 403", 403)),
+    )
+    tag = make_tag(content=f"{{attach:{DEAD_URL}}}")
+    with pytest.raises(TagError, match="status 403"):
+        await parse(dead_link_runtime(db, tag), f"{{attach:{DEAD_URL}}}")
+    db.record_dead_link.assert_not_awaited()
+
+
+async def test_dead_link_in_alias_records_the_target_tag(monkeypatch):
+    error = MediaError("Attachment download failed with status 404", 404)
+    monkeypatch.setattr(tagscript, "download", AsyncMock(side_effect=error))
+    db = FakeDB()
+    db.record_dead_link = AsyncMock()
+    alias = make_tag(content="", reference=222222222222222222)
+    alias["reference_content"] = f"{{attach:{DEAD_URL}}}"
+    with pytest.raises(TagError, match="status 404"):
+        await parse(dead_link_runtime(db, alias), f"{{attach:{DEAD_URL}}}")
+    db.record_dead_link.assert_awaited_once_with(222222222222222222, DEAD_URL)
 
 
 async def test_embeds_pages_and_components():

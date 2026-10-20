@@ -37,6 +37,7 @@ REMOVE_ALL_TIMEOUT = 120
 LIST_PAGE_SIZE = 25
 DETAIL_PAGE_SIZE = 10
 MAX_UNDO = 5
+MAX_LISTED_ALIASES = 20
 EDIT_EVENT_SECONDS = 60
 UNDO_NOTICE_SECONDS = 1
 UNDO_PATTERN = re.compile(r"^\.undo(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
@@ -1473,6 +1474,24 @@ async def prefix_random(bot, message: discord.Message, arguments: str):
     )
 
 
+async def remove_description(bot, guild_id: int, tag: dict) -> str:
+    description = t("remove.force_body", name=code(tag["name"]))
+    names = await bot.db.alias_names(guild_id, tag["id"])
+    if names:
+        aliases = ", ".join(code(name) for name in names[:MAX_LISTED_ALIASES])
+        if len(names) > MAX_LISTED_ALIASES:
+            aliases = t(
+                "remove.more_aliases",
+                aliases=aliases,
+                count=f"{len(names) - MAX_LISTED_ALIASES:,}",
+            )
+        key = "remove.with_alias" if len(names) == 1 else "remove.with_aliases"
+        description += "\n" + t(
+            key, name=code(tag["name"]), aliases=aliases, count=f"{len(names):,}"
+        )
+    return description
+
+
 async def prefix_remove(bot, message: discord.Message, value: str):
     if value.lower().startswith("tag "):
         value = value[4:]
@@ -1491,7 +1510,7 @@ async def prefix_remove(bot, message: discord.Message, value: str):
         return
     embed = discord.Embed(
         title=t("remove.confirm_title"),
-        description=t("remove.force_body", name=code(tag["name"])),
+        description=await remove_description(bot, message.guild.id, tag),
         colour=discord.Colour.blurple(),
     )
     view = ForceRemove(bot, message.author.id, tag, embed)
@@ -2028,7 +2047,7 @@ def register_commands(bot):
             return
         embed = discord.Embed(
             title=t("remove.confirm_title"),
-            description=t("remove.force_body", name=code(tag["name"])),
+            description=await remove_description(bot, interaction.guild_id, tag),
             colour=discord.Colour.blurple(),
         )
         lines = [t("info.created", time=timestamp(tag["created_at"]))]

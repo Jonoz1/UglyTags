@@ -412,3 +412,24 @@ async def test_prune_candidates_and_storage(db):
     assert storage["top_tags"][0]["name"] == "elsewhere"
     assert storage["top_owners"][0]["owner_id"] == 9
     assert (await db.storage(1))["files"] == 0
+
+
+async def test_dead_links_track_expiry_and_cascade(db):
+    tag_id = new_id()
+    url = "https://cdn.discordapp.com/attachments/1/2/a.png?ex=ffffffff&is=1&hm=ab"
+    await db.create_tag(tag_id, 1, "broken", f"{{attach:{url}}}", 7)
+    await db.record_dead_link(tag_id, url)
+    await db.record_dead_link(tag_id, url)
+    rows = await db.dead_links(7)
+    assert [(row["tag_id"], row["url"], row["guild_id"], row["expired"]) for row in rows] == [
+        (tag_id, url, 1, False)
+    ]
+    await db.execute("UPDATE dead_links SET first_failed_at = now() - interval '8 days'")
+    assert [row["expired"] for row in await db.dead_links(7)] == [True]
+    await db.record_dead_link(tag_id, url)
+    assert [row["expired"] for row in await db.dead_links(7)] == [True]
+    await db.drop_dead_link(tag_id, url)
+    assert await db.dead_links(7) == []
+    await db.record_dead_link(tag_id, url)
+    await db.delete(tag_id)
+    assert await db.fetchall("SELECT url FROM dead_links WHERE tag_id = %s", (tag_id,)) == []

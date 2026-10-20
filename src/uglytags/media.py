@@ -23,7 +23,9 @@ ATTACH_REFERENCE = re.compile(
 
 
 class MediaError(Exception):
-    pass
+    def __init__(self, message: str = "", status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 def parse_media_limit_mb(value: str | None) -> int:
@@ -93,7 +95,9 @@ async def download(session: aiohttp.ClientSession, url: str, max_bytes: int) -> 
     timeout = aiohttp.ClientTimeout(total=30)
     async with session.get(url, allow_redirects=False, timeout=timeout) as response:
         if response.status != 200:
-            raise MediaError(f"Attachment download failed with status {response.status}")
+            raise MediaError(
+                f"Attachment download failed with status {response.status}", response.status
+            )
         if response.content_length is not None and response.content_length > max_bytes:
             raise MediaError(f"Attachment surpassed max file size of {max_bytes} bytes")
         data = bytearray()
@@ -104,6 +108,28 @@ async def download(session: aiohttp.ClientSession, url: str, max_bytes: int) -> 
     if not data:
         raise MediaError("Attachment is empty")
     return bytes(data)
+
+
+async def link_status(http, session: aiohttp.ClientSession, url: str) -> int | None:
+    if not is_discord_url(url):
+        return None
+    refreshed = await refresh_urls(http, [url]) if attachment_expired(url) else {}
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with session.get(
+        refreshed.get(url, url), allow_redirects=False, timeout=timeout
+    ) as response:
+        return response.status
+
+
+def contains_link(content: str, url: str) -> bool:
+    # The whole link must appear, so a truncated copy of a working link never matches.
+    return re.search(re.escape(url) + r"(?=$|[\s|}>])", content) is not None
+
+
+def parse_dead_link_days(value: str | None) -> int | None:
+    if value is None or not value.strip():
+        return None
+    return parse_positive_int("DEAD_LINK_DAYS", value, 1)
 
 
 def filename_from_url(url: str) -> str:

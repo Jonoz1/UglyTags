@@ -4,8 +4,9 @@ import itertools
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import ANY, AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock, call
 
+import aiohttp
 import discord
 import pytest
 
@@ -1222,6 +1223,40 @@ async def test_delete_always_confirms(prefix, owner_id):
     await bot.close()
 
 
+@pytest.mark.parametrize("prefix", [False, True])
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [
+        ([], None),
+        (["hi"], "along with its alias `hi`?"),
+        (["a", "b"], "along with its 2 aliases: `a`, `b`?"),
+        ([f"a{index}" for index in range(22)], "along with its 22 aliases: `a0`, `a1`, "),
+    ],
+)
+async def test_delete_confirmation_mentions_aliases(prefix, names, expected):
+    bot = stats_bot(
+        get_tag=AsyncMock(return_value=tag(owner_id=2)),
+        alias_names=AsyncMock(return_value=names),
+    )
+    if prefix:
+        event = prefix_message('.t delete "hello"', ban_members=True)
+        await ui.handle_prefix_message(bot, event)
+        embed = event.reply.await_args.kwargs["embed"]
+    else:
+        event = interaction(ban_members=True)
+        await command(bot, "remove", "tag")(event, "hello")
+        embed = event.response.send_message.await_args.kwargs["embed"]
+    bot.db.alias_names.assert_awaited_once_with(1, 10)
+    if expected is None:
+        assert "alias" not in embed.description
+    else:
+        assert expected in embed.description
+    if len(names) > ui.MAX_LISTED_ALIASES:
+        assert "`a19`, and 2 more?" in embed.description
+        assert "`a20`" not in embed.description
+    await bot.close()
+
+
 @pytest.mark.parametrize("action", ["cancel", "timeout", "lost_permission", "replaced"])
 async def test_delete_does_not_remove_without_valid_confirmation(action):
     bot = stats_bot(
@@ -1331,6 +1366,7 @@ async def test_remove_permissions_follow_notsobot():
         get_tag=AsyncMock(return_value=tag(owner_id=3)),
         delete=AsyncMock(),
         search=AsyncMock(return_value=[tag()]),
+        alias_names=AsyncMock(return_value=[]),
         close=AsyncMock(),
     )
     event = interaction()
@@ -1484,6 +1520,54 @@ async def test_showing_group_runs_random_member():
     await bot.close()
 
 
+async def test_dead_link_sweep_keeps_working_links_and_deletes_expired_tags(monkeypatch):
+    url = "https://cdn.discordapp.com/attachments/1/2/a.png?ex=ffffffff&is=1&hm=ab"
+    gone = "https://cdn.discordapp.com/attachments/1/2/gone.png?ex=ffffffff&is=1&hm=ab"
+    recovered = "https://cdn.discordapp.com/attachments/1/2/ok.png?ex=ffffffff&is=1&hm=ab"
+
+    def row(tag_id, link, content=None, expired=False):
+        return {
+            "tag_id": tag_id,
+            "url": link,
+            "guild_id": 1,
+            "content": content if content is not None else f"{{attach:{link}}}",
+            "expired": expired,
+        }
+
+    rows = [
+        row(1, gone, content="no link here"),
+        row(2, url, expired=True),
+        row(3, recovered),
+        row(4, url),
+        row(5, url, expired=True),
+        row(5, recovered, expired=True),
+        row(6, url, expired=True),
+        row(7, url, expired=True),
+    ]
+    statuses = [
+        aiohttp.ClientError(),
+        200,
+        404,
+        404,
+        discord.HTTPException(SimpleNamespace(status=503, reason="busy"), "unavailable"),
+        TimeoutError(),
+    ]
+    status = AsyncMock(side_effect=statuses)
+    monkeypatch.setattr("uglytags.bot.link_status", status)
+    bot = stats_bot(
+        dead_links=AsyncMock(return_value=rows),
+        delete_matching=AsyncMock(),
+        drop_dead_link=AsyncMock(),
+    )
+    bot.dead_link_days = 7
+    assert await bot.sweep_dead_links() == 1
+    bot.db.dead_links.assert_awaited_once_with(7)
+    assert status.await_count == 6
+    assert bot.db.drop_dead_link.await_args_list == [call(1, gone), call(3, recovered)]
+    bot.db.delete_matching.assert_awaited_once_with(1, [5])
+    await bot.close()
+
+
 def command_t(bot):
     return bot.tree.get_command("t").callback
 
@@ -1537,6 +1621,7 @@ def test_format_size():
 def stats_bot(**methods):
     bot = UglyTags("postgresql://localhost/test")
     methods.setdefault("similar_names", AsyncMock(return_value=[]))
+    methods.setdefault("alias_names", AsyncMock(return_value=[]))
     bot.db = SimpleNamespace(close=AsyncMock(), **methods)
     return bot
 
